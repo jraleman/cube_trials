@@ -6,8 +6,12 @@ const State = preload("res://games/cube_trials/trial_state.gd")
 const Course = preload("res://games/cube_trials/course.gd")
 const Art = preload("res://games/cube_trials/cube_art.gd")
 const Landscape = preload("res://games/cube_trials/world/copper_creek.gd")
+const SPEED_BLUR = preload("res://games/cube_trials/assets/shaders/speed_blur.gdshader")
 const CAMERA_OFFSET := Vector3(10, 6, 32)
 const MAX_RENDER_WIDTH := 1920
+const MAX_BLUR_PIXELS := 2.25
+const BLUR_START_SPEED := 140.0
+const BLUR_FULL_SPEED := 500.0
 
 var state: State
 var reduced_motion := false
@@ -22,6 +26,11 @@ var _image: TextureRect
 var _overlay: Control
 var _zoom := 1.0
 var _camera_ready := false
+var _blur_material: ShaderMaterial
+var _blur_pixels := Vector2.ZERO
+var _blur_strength := 0.0
+var _last_recoveries := 0
+var _was_recovering := false
 
 
 func _init() -> void:
@@ -54,6 +63,8 @@ func _ready() -> void:
 	_image.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_image.texture = world_viewport.get_texture()
+	_blur_material = ShaderMaterial.new()
+	_blur_material.shader = SPEED_BLUR
 	add_child(_image)
 	_image.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_overlay = Control.new()
@@ -66,11 +77,21 @@ func _ready() -> void:
 	_resize_world()
 
 
+## Dresses the car in the paint and wheels bought from the garage. Only the
+## look changes: nothing sold alters mass, grip, ride height or the clock.
+func set_finish(paint: String, rim: String) -> void:
+	if world != null and world.car != null:
+		world.car.set_finish(paint, rim)
+
+
 ## Replays reuse the scenery; only the model, camera and collectible visibility reset.
 func configure(run: State) -> void:
 	state = run
 	_camera_ready = false
 	ambient_time = 0.0
+	braking = false
+	_last_recoveries = state.recoveries
+	_was_recovering = state.crash_wait > 0.0
 	present(0.0)
 
 
@@ -78,6 +99,10 @@ func configure(run: State) -> void:
 func present(delta: float) -> void:
 	if state == null or world == null:
 		return
+	var recovering := state.crash_wait > 0.0
+	var recovered := state.recoveries != _last_recoveries or (_was_recovering and not recovering)
+	_last_recoveries = state.recoveries
+	_was_recovering = recovering
 	var visible_width := 980.0 if size.y > size.x * 0.95 else 1250.0
 	_zoom = maxf(0.1, minf(size.x / visible_width, size.y / 590.0))
 	var visible_height := size.y / _zoom
@@ -86,7 +111,9 @@ func present(delta: float) -> void:
 	var landing_height := Course.ground_height(state.position.x + 330.0)
 	if is_finite(landing_height):
 		target.y = maxf(target.y, landing_height - visible_height * 0.34)
-	if reduced_motion or not _camera_ready or camera.distance_to(target) > 650.0:
+	var snap := reduced_motion or recovered or not _camera_ready \
+		or camera.distance_to(target) > 650.0
+	if snap:
 		camera = target
 	else:
 		camera = camera.lerp(target, 1.0 - exp(-delta * 7.0))
@@ -97,7 +124,9 @@ func present(delta: float) -> void:
 	world_camera.position = focus + CAMERA_OFFSET
 	world_camera.look_at(focus)
 	world_camera.size = maxf(1.0, visible_height * Art.WORLD_SCALE)
-	world.present(state, ambient_time, reduced_motion, intense_effects, braking)
+	world.present(state, ambient_time, reduced_motion, intense_effects, braking,
+		0.0 if recovered else delta)
+	_update_motion_blur(delta, snap or recovering)
 	_overlay.queue_redraw()
 
 
@@ -113,6 +142,39 @@ func set_reduced_motion(value: bool) -> void:
 func set_intense_effects(value: bool) -> void:
 	intense_effects = value
 	present(0.0)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PAUSED:
+		_clear_motion_blur()
+
+
+func _update_motion_blur(delta: float, reset: bool) -> void:
+	if reset or delta <= 0.0 or reduced_motion or not intense_effects \
+		or get_tree().paused or not state.started or state.finished \
+		or absf(state.velocity.x) <= BLUR_START_SPEED:
+		_clear_motion_blur()
+		return
+	var target := smoothstep(BLUR_START_SPEED, BLUR_FULL_SPEED, absf(state.velocity.x))
+	_blur_strength = lerpf(_blur_strength, target, 1.0 - exp(-delta * 10.0))
+	var focus := Art.world_point(state.position)
+	var moving := Art.world_point(state.position + state.velocity)
+	var direction := world_camera.unproject_position(moving) \
+		- world_camera.unproject_position(focus)
+	_blur_pixels = direction.normalized() * MAX_BLUR_PIXELS * _blur_strength
+	var car_bounds := car_screen_bounds()
+	_blur_material.set_shader_parameter("blur_offset",
+		_blur_pixels / Vector2(world_viewport.size))
+	_blur_material.set_shader_parameter("focus_uv", car_bounds.get_center() / size)
+	_blur_material.set_shader_parameter("focus_radius", car_bounds.size * 0.6 / size)
+	_image.material = _blur_material
+
+
+func _clear_motion_blur() -> void:
+	_blur_strength = 0.0
+	_blur_pixels = Vector2.ZERO
+	if _image != null:
+		_image.material = null
 
 
 ## Screen projection is shared by the route feedback and geometric rendering checks.

@@ -36,18 +36,23 @@ cube_trials_options.gd     # constants-only tunables and rebindable actions
 gameplay.gd / .tscn        # round logic on top of the shared GameShell
 intro.tscn                 # shared boot intro
 trial_state.gd             # 120 Hz suspension, traction, collision and tilt
+vehicle_tuning.gd          # shared dimensions, stock-like ride height and suspension
 course.gd                  # single source of terrain, pickups and checkpoints
-course_view.gd             # isolated SubViewport + orthographic follow camera
+course_view.gd             # isolated SubViewport, follow camera and scenery blur
 drive_controls.gd          # keyboard, gamepad and multitouch input
 cube_audio.gd              # synthesized engine hum and event cues
 cube_art.gd                # palette and daylight shared by every renderer
 share_art.gd / .tscn       # score-share portrait in its own 3D studio viewport
+gallery_stage.gd / .tscn   # turntable for the shared Gallery screen's plinths
+store_preview.gd / .tscn   # the car or wheel on a shared Store screen card
 world/copper_creek.gd      # terrain extruded from the exact collision profile
-world/cube_model.gd        # imported car, four physics-driven wheels and visible struts
-world/nissan_cube.tscn     # reusable lifted car scene using the same adapter
+world/cube_model.gd        # imported car, physics-driven wheels and animated brake lights
+world/cube_finish.gd       # what each bought paint and wheel finish looks like
+world/nissan_cube.tscn     # reusable stock-proportion car using the same adapter
 world/mesh_builder.gd      # batches original geometry into lit surfaces
 assets/                    # game-icon.png, tutorial_poster.png (both generated)
 assets/models/             # portable nissan_cube.glb and Godot import settings
+assets/shaders/            # subtle speed blur with a protected car region
 tests/                     # four suites plus driver_fixture.gd
 tools/capture_art.gd       # dev-only art capture; excluded from exports
 tools/reference/           # dev-only modeling reference; see its README
@@ -79,6 +84,11 @@ Keyboard bindings are generated from `cube_trials_options.gd` and are
 rebindable. The settings **Game** tab exposes live **air control** strength
 (50–150%) and an **engine sound** toggle.
 
+Braking smoothly brightens the red rear lamps and adds a short-range red glow.
+At speed, a restrained five-sample blur affects scenery only, leaving the car
+and HUD sharp. Blur is capped at 2.25 render pixels and clears when parking,
+pausing, recovering, restarting or finishing.
+
 ## Rules
 
 Collect all **five numbered spark plugs**, then brake inside the garage. The two
@@ -97,13 +107,72 @@ any other finish earns Bronze. Each plug scores 1,000 points; finishing adds
 reward finishing (`HOME`), a no-recovery run (`CLEAN`) and Gold (`GOLD`).
 Assists never block an achievement.
 
-## Accessibility
+## The garage
 
+Finishing a run pays **Sparks**, and the main menu's **Store** button spends
+them at the Copper Creek garage. The pause menu reaches the same screen, so a
+car can be resprayed mid-run and comes back wearing the new coat.
+
+A delivered run pays `round(score × 0.006) + 4`, which is about 41 Sparks for a
+Gold commute and 34 for a slow one; an abandoned run still pays for the plugs
+collected. There is no payout ceiling, because this score cannot be farmed —
+five plugs, one finish line, and a bonus that only shrinks with time.
+
+| Slot | Sells |
+| --- | --- |
+| Body paint | Factory Bronze (free), Creek Green, Quarry Slate, Plug Ceramic, Signal Orange, Quarry Midnight, Copper Flake, Express Gold |
+| Wheels | Factory Alloy (free), Graphite, Bronze Face, Trail White, Gloss Black |
+
+**Nothing on sale is worth a second on the clock.** No item changes mass, grip,
+ride height, suspension or scoring — the trial is the same trial in every
+colour, which is the point of spending Sparks on paint rather than on parts.
+Express Gold is gated behind `cube_trials_gold` and Gloss Black behind
+`cube_trials_clean`.
+
+`world/cube_finish.gd` is the only place that knows what a colour *is*. A
+finish restates two of the surfaces the GLB exporter already batched — matched
+by material name, so `cube_trials_3d_test.gd` fails loudly if a Blender rename
+breaks the link — and the two free looks apply no override at all, so the
+factory car wears the materials Blender wrote rather than a copy of them. Their
+shelf swatches are quoted from the same module rather than retyped as hex, and
+the test checks both against the export. Store cards, the round and the share
+portrait all call the same function, so a swatch on the shelf cannot promise a
+colour the trail fails to deliver.
+
+## Gallery
+
+The main menu carries a **Gallery** button, and the pause menu reaches the same
+screen mid-round. It is a museum, not an advert: nine exhibits sit on a plinth
+under Copper Creek's own late-afternoon daylight, and every one of them is built
+by the same code the trail runs, so the gallery can never quietly show a nicer
+version of the game than the one you drive.
+
+| Heading | Exhibits |
+| --- | --- |
+| The car | The Brown Nissan Cube, Alloy Wheel and Tire, Coilover Strut |
+| The trail | Numbered Spark Plug, Checkpoint Flag, Trail Sign Board |
+| Copper Creek | Roadside Pine, Trail Fence |
+| The finish | Trail Service Garage |
+
+The car is shown after its suspension has settled under its own weight, the
+strut at the length a parked car holds it at, and the plug carries the same
+3D-text number the trail hands out. The garage stays locked until the
+`cube_trials_home` achievement is earned, so the finish is not spoiled.
+
+Drag the model to turn it, scroll to zoom, or use the on-screen turn, tilt and
+zoom buttons; **Reset** returns to the default framing. Auto-spin is on by
+default and is parked by **Reduced motion**, which leaves the model still and
+fully controllable.
+
+## Accessibility
 Reduced motion parks clouds, water ripples, pickup and flag motion and tire
-dust, and removes camera smoothing; driving, wheel rotation, suspension travel
-and necessary camera tracking remain. The shallow camera angle keeps the quarry
-landing visible either way. Intense effects independently suppress tire dust.
-Every meaningful sound also has visible feedback and an audio caption.
+dust, and removes camera smoothing, speed blur and decorative brake-light spill.
+Driving, wheel rotation, suspension travel and necessary camera tracking remain;
+essential brake lamps respond immediately instead of fading. The shallow camera
+angle keeps the quarry landing visible either way. Disabling intense effects
+independently suppresses tire dust, speed blur and brake-light spill without
+removing the brake lamps. Every meaningful sound also has visible feedback and
+an audio caption.
 
 ## Tests
 
@@ -118,9 +187,9 @@ godot --headless --path . --script res://games/cube_trials/tests/cube_trials_3d_
 
 | Suite | Covers |
 | --- | --- |
-| `cube_trials_test.gd` | Fixed-step physics, recoveries and a complete input-only drive |
-| `cube_trials_scene_test.gd` | Live rebinding, multitouch, pause, assists, results and achievements |
-| `cube_trials_3d_test.gd` | Volumetric bodywork, normals, wheel/strut poses, terrain alignment, 3D pickups and effects |
+| `cube_trials_test.gd` | Fixed-step physics, stock ride height and contacts, recoveries and a complete input-only drive |
+| `cube_trials_scene_test.gd` | Live rebinding, multitouch and action-driven braking, pause, assists, replay, results and achievements |
+| `cube_trials_3d_test.gd` | Volumetric bodywork, normals, measured stock-like stance, wheel/strut poses, animated brake materials and lights, terrain alignment, 3D pickups and the nine gallery exhibits |
 | `cube_trials_view_test.gd` | **Graphics window required** — see below |
 
 `driver_fixture.gd` is a shared helper, not a suite; skip `*_fixture.gd` when
@@ -134,10 +203,11 @@ and says so. Never read that headless exit code as a regression:
 godot --path . --script res://games/cube_trials/tests/cube_trials_view_test.gd -- --game=cube_trials
 ```
 
-It checks actual 3D geometry and brown bodywork, landscape/portrait/ultrawide
-layouts, minimum physical touch-target sizes, an input-driven quarry jump,
-results, 3D share art and the standalone title, and measures the viewport's
-200-draw / 120,000-triangle budget. Pass an optional
+It checks actual 3D geometry and brown bodywork, rendered brake-lamp brightness,
+scenery blur with sharp car/HUD pixels, effect accessibility and reset behavior,
+landscape/portrait/ultrawide layouts, minimum physical touch-target sizes, an
+input-driven quarry jump, results, 3D share art and the standalone title. It
+also measures the viewport's 200-draw / 120,000-triangle budget. Pass an optional
 `--cube-capture-dir=<absolute directory>` to save rendered examples.
 
 ## Regenerating art
@@ -199,20 +269,26 @@ by finish and rejects exports above 45,000 triangles or 48 surfaces. Glass
 uses alpha transparency rather than Cycles transmission/refraction, so it
 works with Godot's Compatibility renderer. Godot also generates mesh LODs.
 
-Instance `world/nissan_cube.tscn` for this game's lifted assembly. The adapter
-fits the stock body to the existing roof/belly envelope and wheelbase, scales
-the tires to the collision radius, and drives wheel travel, spin, struts and
-brake lights from `trial_state.gd`. It does not change the simulation. To reuse
-the stock-proportion car in another Godot project, copy just the GLB and let
-that project import it; the lifted scene depends on Cube Trials' scripts.
+Instance `world/nissan_cube.tscn` for this game's stock-proportion assembly.
+The adapter uniformly scales the body and detailed five-spoke wheels, keeping
+the tires tucked beneath the fenders rather than stretching or lifting the car.
+`vehicle_tuning.gd` synchronizes the model with its collision tire radius,
+short suspension, bump stops, roof/belly contacts and checkpoint ride height.
+The runtime tires have an approximately 0.34 m radius, with about 0.23 m of
+body clearance at rest. Wheel travel, spin and brake animation follow
+`trial_state.gd`; each car has its own brake material and optional glow lights.
+To reuse the car in another Godot project, copy just the GLB and let that
+project import it; the reusable scene depends on Cube Trials' scripts.
 
 ## Engine notes
 
-The renderer stays `gl_compatibility`; do not change the physics or add
-framework game-name branches to alter this game's presentation. The 3D view uses
-4x MSAA and caps its render target to 1920x1600 while matching the window's
-physical pixel density. `.uid` and `.import` files are project state and are
-committed on purpose; only the generated `.godot/` cache is ignored.
+The renderer stays `gl_compatibility`; keep visual dimensions and collision
+geometry synchronized through `vehicle_tuning.gd`, without adding framework
+game-name branches. The 3D view uses 4x MSAA and caps its render target to
+1920x1600 while matching the window's physical pixel density. Speed blur runs
+only on the world's TextureRect, never over shell controls or the HUD.
+`.uid` and `.import` files are project state and are committed on purpose;
+only the generated `.godot/` cache is ignored.
 
 ## Credits and rights
 

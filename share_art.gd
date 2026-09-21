@@ -11,6 +11,8 @@ var model: Cube
 var world_viewport: SubViewport
 var _camera: Camera3D
 var _image: TextureRect
+var _paint_id := ""
+var _rim_id := ""
 
 
 func _ready() -> void:
@@ -27,6 +29,8 @@ func _ready() -> void:
 	world_viewport.add_child(stage)
 	Art.light_stage(stage)
 	model = Cube.new()
+	model.paint_id = _paint_id
+	model.rim_id = _rim_id
 	stage.add_child(model)
 	var state := State.new()
 	state.advance(0.5, 0.0, 0.0, 0.0)
@@ -59,8 +63,15 @@ func _ready() -> void:
 
 
 ## Score art is a parked model, so captures never depend on a decorative animation phase.
-func configure(_data: Dictionary) -> void:
+##
+## The car on the card is the one that just did the run, in the paint it did it
+## in — a share card showing a stock bronze Cube after 70 Sparks of respray
+## would be advertising a different car than the player drove.
+func configure(data: Dictionary) -> void:
+	_paint_id = str(data.get("paint_id", ""))
+	_rim_id = str(data.get("rim_id", ""))
 	if is_node_ready():
+		model.set_finish(_paint_id, _rim_id)
 		_frame_camera()
 
 

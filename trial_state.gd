@@ -3,12 +3,13 @@ extends RefCounted
 ## Fixed-step sprung chassis and run rules, independent of nodes and autoloads.
 
 const Course = preload("res://games/cube_trials/course.gd")
+const Tuning = preload("res://games/cube_trials/vehicle_tuning.gd")
 const STEP := 1.0 / 120.0
-const WHEEL_RADIUS := 23.0
-const REST_LENGTH := 44.0
-const MAX_LENGTH := 61.0
-const AXLES: Array[Vector2] = [Vector2(-53, 14), Vector2(53, 14)]
-const ROOF: Array[Vector2] = [Vector2(-64, -57), Vector2(0, -62), Vector2(58, -55)]
+const WHEEL_RADIUS := Tuning.WHEEL_RADIUS
+const REST_LENGTH := Tuning.REST_LENGTH
+const MAX_LENGTH := Tuning.MAX_LENGTH
+const AXLES: Array[Vector2] = Tuning.AXLES
+const ROOF: Array[Vector2] = Tuning.ROOF
 const INERTIA := 3000.0
 const RECOVERY_PENALTY := 5.0
 const GOLD_SECONDS := 45.0
@@ -123,7 +124,7 @@ static func time_text(seconds: float) -> String:
 
 func _simulate(drive: float, brake: float, tilt: float) -> void:
 	var down := Vector2.DOWN.rotated(angle)
-	var force := Vector2(-velocity.x * 0.18, 980.0)
+	var force := Vector2(-velocity.x * 0.18, Tuning.GRAVITY)
 	var torque := -angular_velocity * INERTIA * 1.2
 	contacts = 0
 	for index in 2:
@@ -143,8 +144,10 @@ func _simulate(drive: float, brake: float, tilt: float) -> void:
 		var tangent := Vector2(-normal.y, normal.x)
 		var point_velocity := velocity + Vector2(-arm.y, arm.x) * angular_velocity
 		var compression := REST_LENGTH - length
-		var support := clampf(compression * 88.0 - point_velocity.dot(normal) * 9.0,
-			0.0, 5200.0)
+		var support := clampf(
+			compression * Tuning.SPRING_STIFFNESS
+			- point_velocity.dot(normal) * Tuning.SPRING_DAMPING, 0.0, 5200.0
+		)
 		var spring := normal * support
 		var speed := point_velocity.dot(tangent)
 		var traction := tangent * clampf(
@@ -154,8 +157,8 @@ func _simulate(drive: float, brake: float, tilt: float) -> void:
 		force += spring + traction
 		torque += arm.cross(spring) + arm.cross(traction) * 0.35
 		wheel_angles[index] += speed / WHEEL_RADIUS * STEP
-		if length < 4.0:
-			position += normal * (4.0 - length) * 0.5
+		if length < Tuning.MIN_LENGTH:
+			position += normal * (Tuning.MIN_LENGTH - length) * 0.5
 			var inward := velocity.dot(normal)
 			if inward < 0.0:
 				velocity -= normal * inward * 0.55
@@ -182,7 +185,7 @@ func _simulate(drive: float, brake: float, tilt: float) -> void:
 		if point.y > Course.ground_height(point.x) - 2.0:
 			_crash("Roof hit the trail.")
 			return
-	for corner in [Vector2(-73, 15), Vector2(76, 15)]:
+	for corner in Tuning.BODY_CONTACTS:
 		var arm: Vector2 = corner.rotated(angle)
 		var point := position + arm
 		var penetration := point.y - Course.ground_height(point.x)
@@ -265,5 +268,5 @@ func _respawn() -> void:
 	_air_time = 0.0
 	_gate_notified = false
 	for index in 2:
-		wheel_centers[index] = position + AXLES[index] + Vector2.DOWN * REST_LENGTH
+		wheel_centers[index] = position + AXLES[index] + Vector2.DOWN * Tuning.STATIC_LENGTH
 		wheel_angles[index] = 0.0

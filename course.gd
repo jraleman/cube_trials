@@ -2,6 +2,7 @@ extends RefCounted
 
 ## Copper Creek's original geometry is shared by drawing, suspension and tests.
 
+const Tuning = preload("res://games/cube_trials/vehicle_tuning.gd")
 const TITLE := "COPPER CREEK"
 const START_X := 180.0
 const FINISH_X := 5150.0
@@ -60,13 +61,13 @@ static func ground_normal(x: float) -> Vector2:
 ## Plugs sit within the cabin's reach even when a wheel is riding a crest.
 static func plug_position(index: int) -> Vector2:
 	var x := PLUG_X[index]
-	return Vector2(x, ground_height(x) - 106.0)
+	return Vector2(x, ground_height(x) - Tuning.RIDE_HEIGHT - 36.0)
 
 
 ## Checkpoints are level pull-offs, with room for the suspension to settle.
 static func spawn_position(checkpoint: int) -> Vector2:
 	var x := CHECKPOINT_X[checkpoint]
-	return Vector2(x, ground_height(x) - 77.0)
+	return Vector2(x, ground_height(x) - Tuning.RIDE_HEIGHT)
 
 
 ## Cast against the tire-radius-offset surface, allowing compressed springs.

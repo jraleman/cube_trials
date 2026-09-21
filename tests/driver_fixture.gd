@@ -7,12 +7,12 @@ const Course = preload("res://games/cube_trials/course.gd")
 const Options = preload("res://games/cube_trials/cube_trials_options.gd")
 
 
-## Slow for washboard, carry speed over the quarry, and actually park at the end.
+## Carry momentum over short-wheel-travel crests and the quarry, then actually park.
 static func controls(state: State) -> Vector3:
 	var x := state.position.x
 	var target_speed := 380.0
 	if x > 1080.0 and x < 1820.0:
-		target_speed = 220.0
+		target_speed = 340.0
 	elif x > 2100.0 and x < 3140.0:
 		target_speed = 620.0
 	elif x > 5030.0:

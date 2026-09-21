@@ -23,6 +23,16 @@ static func manifest() -> GameManifest:
 	game.control_bindings = Options.CONTROL_BINDINGS
 	game.tutorial_poster_path = "res://games/cube_trials/assets/tutorial_poster.png"
 	game.share_art_scene_path = "res://games/cube_trials/share_art.tscn"
+	# Runs pay Sparks; Sparks pay the garage to respray the car. Two slots,
+	# because the only car on the trail wears one paint and one wheel finish.
+	game.store_currency = Options.STORE_CURRENCY
+	game.store_slots = Options.STORE_SLOTS
+	game.store_items = Options.STORE_ITEMS
+	game.store_preview_scene_path = "res://games/cube_trials/store_preview.tscn"
+	# The museum for a game that is only ever seen from one side at speed: the
+	# same models, standing still, at whatever angle you like.
+	game.gallery_exhibits = Options.GALLERY_EXHIBITS
+	game.gallery_stage_scene_path = "res://games/cube_trials/gallery_stage.tscn"
 	game.stats_url = "https://deskcansaw.com"
 	game.copy = {
 		"single_player_description": (
@@ -50,6 +60,15 @@ static func manifest() -> GameManifest:
 			+ "Air control and engine sound can be changed live in Settings."
 		),
 		"instructions_demo_prompt": "SMALL CAR. BIG DETOUR.",
+		"store_intro": (
+			"Every delivery pays Sparks — one per plug brought in and the rest "
+			+ "for how quickly you did it. Spend them at the garage on paint "
+			+ "and wheels. None of it makes the car any faster."
+		),
+		"gallery_intro": (
+			"Every model Copper Creek is made of, up close. Turn them, zoom in, "
+			+ "and get a proper look at the little brown car for once."
+		),
 		"instructions_player_one_controls": (
 			"Use the rebindable controls below or hold the on-screen pedals and tilt buttons. "
 			+ "Touch supports multiple fingers. On a gamepad: right trigger accelerates, "

@@ -20,6 +20,8 @@ var _air_control := 1.0
 var _feedback_text := ""
 var _feedback_left := 0.0
 var _key_hint := ""
+var _paint_id := ""
+var _rim_id := ""
 var _ui_factor := 1.0
 var _layout_pending := false
 
@@ -43,6 +45,18 @@ func _load_round_settings() -> void:
 	super()
 	_air_control = Settings.tunable(Options.AIR_CONTROL_KEY)
 	_engine_enabled = Settings.tunable_bool(Options.ENGINE_AUDIO_KEY)
+	_paint_id = Store.equipped_id(Options.GAME_ID, Options.PAINT_SLOT)
+	_rim_id = Store.equipped_id(Options.GAME_ID, Options.RIM_SLOT)
+
+
+## The garage can be visited from the pause menu, so a car that was resprayed
+## mid-run comes back wearing the new coat rather than waiting for a restart.
+func _apply_finish() -> void:
+	if _view == null:
+		return
+	_paint_id = Store.equipped_id(Options.GAME_ID, Options.PAINT_SLOT)
+	_rim_id = Store.equipped_id(Options.GAME_ID, Options.RIM_SLOT)
+	_view.set_finish(_paint_id, _rim_id)
 
 
 func _build_playfield() -> void:
@@ -81,6 +95,7 @@ func _reset_round_state() -> void:
 	_feedback_left = 0.0
 	_feedback_text = ""
 	_controls.set_enabled(true)
+	_apply_finish()
 	_view.configure(_state)
 	_engine.stop()
 	_sync_hud()
@@ -152,6 +167,7 @@ func _recover() -> void:
 		return
 	_state.recover()
 	_controls.clear_input()
+	_view.braking = false
 	_view.present(0.0)
 
 
@@ -164,6 +180,7 @@ func open_pause_menu() -> void:
 
 func _on_pause_closed() -> void:
 	super()
+	_apply_finish()
 	if _round_active:
 		get_viewport().gui_release_focus()
 
@@ -178,6 +195,9 @@ func _finish_round() -> void:
 		_controls.set_enabled(false)
 	if _engine != null:
 		_engine.stop()
+	if _view != null:
+		_view.braking = false
+		_view.present(0.0)
 
 
 func _configure_mode_ui() -> void:
@@ -311,6 +331,8 @@ func _share_payload() -> Dictionary:
 	data["combo_value"] = _state.recoveries
 	data["misses_value"] = _state.recoveries
 	data["challenge"] = "A VERY UNREASONABLE COMMUTE"
+	data["paint_id"] = _paint_id
+	data["rim_id"] = _rim_id
 	data["rematch_title"] = "FIVE PLUGS. ONE LITTLE CUBE."
 	data["rematch_copy"] = "%s / %s / Can you find a cleaner line?" % [
 		_state.medal(), State.time_text(_state.adjusted_time()),

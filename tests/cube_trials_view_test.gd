@@ -8,6 +8,8 @@ const Course = preload("res://games/cube_trials/course.gd")
 const Options = preload("res://games/cube_trials/cube_trials_options.gd")
 const Driver = preload("res://games/cube_trials/tests/driver_fixture.gd")
 const Art = preload("res://games/cube_trials/cube_art.gd")
+const Cube = preload("res://games/cube_trials/world/cube_model.gd")
+const View = preload("res://games/cube_trials/course_view.gd")
 
 var _failures := PackedStringArray()
 var _game: Node
@@ -75,6 +77,10 @@ func _run() -> void:
 	settings.call("set_value", "ui/scale", 1.0)
 	get_root().size = Vector2i(1280, 720)
 	(_game.get_node("%PauseButton") as Control).hide()
+	await _render_frames()
+	await _test_rendered_brakes()
+	await _test_motion_blur()
+	_game.call("_on_play_again_pressed")
 	await _render_frames()
 	var state: State = _game.get("_state")
 	_drive_to(2860.0)
@@ -176,7 +182,7 @@ func _test_brown_cube() -> void:
 		"The camera must keep the driver's brown bodywork visible.")
 	var image := get_root().get_texture().get_image()
 	var ratio := Vector2(image.get_size()) / get_root().get_visible_rect().size
-	var pixel := (view.position + point) * ratio
+	var pixel := (view.global_position + point) * ratio
 	var color := image.get_pixel(clampi(roundi(pixel.x), 0, image.get_width() - 1),
 		clampi(roundi(pixel.y), 0, image.get_height() - 1))
 	_expect(color.r > color.g * 1.25 and color.g > color.b * 1.25,
@@ -220,6 +226,134 @@ func _test_draw_budget() -> void:
 	_expect(draws > 10 and draws <= 200 and triangles > 1000 and triangles < 120000,
 		"The actual 3D view must stay within its Compatibility budget (%d draws / %d triangles)."
 		% [draws, triangles])
+
+
+func _test_rendered_brakes() -> void:
+	var view := _game.get("_view") as View
+	var car: Cube = view.world.car
+	var state: State = _game.get("_state")
+	var saved_transform := view.world_camera.transform
+	var saved_size := view.world_camera.size
+	view.world_camera.position = car.position + Vector3(-5.5, 2.3, 5.5)
+	view.world_camera.look_at(car.position)
+	view.world_camera.size = 4.7
+	car.apply_state(state, false)
+	await _render_frames()
+	var off := view.world_viewport.get_texture().get_image()
+	# Essential emission must remain visible even with both decorative effects disabled.
+	car.apply_state(state, true, 0.0, true, false)
+	await _render_frames()
+	var on := view.world_viewport.get_texture().get_image()
+	var brighter_red := 0
+	for y in range(0, on.get_height(), 2):
+		for x in range(0, on.get_width(), 2):
+			var dark := off.get_pixel(x, y)
+			var bright := on.get_pixel(x, y)
+			if bright.r > dark.r + 0.08 and bright.r > bright.g * 1.5 \
+				and bright.r > bright.b * 1.5:
+				brighter_red += 1
+	_expect(brighter_red > 12,
+		"Braking must visibly brighten the rendered red lenses, not only a material property.")
+	car.apply_state(state, true, 0.0, false, true)
+	await _render_frames()
+	_test_draw_budget()
+	await _capture("brakes-on")
+	car.apply_state(state, false)
+	view.world_camera.transform = saved_transform
+	view.world_camera.size = saved_size
+	view.present(0.0)
+
+
+func _test_motion_blur() -> void:
+	var view := _game.get("_view") as View
+	var state: State = _game.get("_state")
+	var image_node := view.get_node("WorldImage") as TextureRect
+	_game.call("_set_reduced_motion_enabled", false)
+	_game.call("_set_intense_effects_enabled", true)
+	state.started = true
+	state.velocity = Vector2(520, 0)
+	for frame in 40:
+		view.present(1.0 / 60.0)
+	var blur_pixels: Vector2 = view.get("_blur_pixels")
+	_expect(image_node.material is ShaderMaterial and blur_pixels.length() > 2.1
+		and blur_pixels.length() <= View.MAX_BLUR_PIXELS + 0.001,
+		"High-speed scenery blur must remain subtle and capped at 2.25 render pixels.")
+	await _render_frames()
+	_test_brown_cube()
+	var blurred := get_root().get_texture().get_image()
+	await _capture("motion-blur")
+	var blur_material := image_node.material
+	image_node.material = null
+	await _render_frames()
+	_test_brown_cube()
+	var sharp := get_root().get_texture().get_image()
+	await _capture("motion-blur-sharp")
+	var ratio := Vector2(sharp.get_size()) / get_root().get_visible_rect().size
+	var rectangle := view.get_global_rect()
+	var world_pixels := Rect2(rectangle.position * ratio, rectangle.size * ratio)
+	var car_bounds := view.car_screen_bounds()
+	var car_pixels := Rect2((view.global_position + car_bounds.position) * ratio,
+		car_bounds.size * ratio)
+	var changed_world := 0
+	var changed_hud := 0
+	var changed_car := 0
+	for y in range(0, sharp.get_height(), 2):
+		for x in range(0, sharp.get_width(), 2):
+			var difference := _color_difference(sharp.get_pixel(x, y), blurred.get_pixel(x, y))
+			if car_pixels.has_point(Vector2(x, y)) and difference >= 0.012:
+				changed_car += 1
+			if difference < 0.015:
+				continue
+			if world_pixels.has_point(Vector2(x, y)):
+				changed_world += 1
+			else:
+				changed_hud += 1
+	_expect(changed_world > 80 and changed_hud == 0,
+		"The shader must blur actual scenery pixels while leaving the entire HUD untouched.")
+	_expect(changed_car == 0,
+		"The protected car region must retain crisp paint and wheel detail.")
+	image_node.material = blur_material
+	_game.call("_set_reduced_motion_enabled", true)
+	_expect(image_node.material == null,
+		"Reduced motion must immediately bypass the blur shader.")
+	_game.call("_set_reduced_motion_enabled", false)
+	for frame in 10:
+		view.present(1.0 / 60.0)
+	_game.call("_set_intense_effects_enabled", false)
+	_expect(image_node.material == null,
+		"Disabling intense effects must independently remove motion blur.")
+	_game.call("_set_intense_effects_enabled", true)
+	for frame in 10:
+		view.present(1.0 / 60.0)
+	paused = true
+	_expect(image_node.material == null, "Pausing must not leave a frozen blurred world.")
+	paused = false
+	state.velocity = Vector2(-520, 0)
+	for frame in 10:
+		view.present(1.0 / 60.0)
+	blur_pixels = view.get("_blur_pixels")
+	_expect(blur_pixels.x < 0.0, "Reversing must reverse the projected blur direction.")
+	state.velocity = Vector2(View.BLUR_START_SPEED, 0)
+	view.present(1.0 / 60.0)
+	_expect(image_node.material == null, "Slow driving and parking must remain sharp.")
+	state.velocity = Vector2(520, 0)
+	view.present(1.0 / 60.0)
+	state.crash_wait = 0.5
+	view.present(1.0 / 60.0)
+	_expect(image_node.material == null, "Recovery must remove motion blur immediately.")
+	state.crash_wait = 0.0
+	view.present(1.0 / 60.0)
+	_expect(image_node.material == null, "The first post-recovery frame must not smear a teleport.")
+	for frame in 10:
+		view.present(1.0 / 60.0)
+	state.finished = true
+	view.present(1.0 / 60.0)
+	_expect(image_node.material == null, "Results must never retain speed blur.")
+	_game.call("_set_reduced_motion_enabled", true)
+
+
+func _color_difference(a: Color, b: Color) -> float:
+	return absf(a.r - b.r) + absf(a.g - b.g) + absf(a.b - b.b)
 
 
 func _render_frames() -> void:

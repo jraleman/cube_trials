@@ -51,6 +51,7 @@ func _run() -> void:
 		"The shared countdown and lives pool must not run during the trial.")
 	await _test_rebinding(settings)
 	_test_multitouch_and_pause()
+	_test_brake_inputs()
 	_test_live_accessibility(settings)
 	_test_real_finish()
 	_game.call("_on_play_again_pressed")
@@ -173,6 +174,40 @@ func _test_live_accessibility(settings: Node) -> void:
 		and not bool(view.get("intense_effects")),
 		"Both the shell and trail must receive the intense-effects setting.")
 	settings.call("set_value", Options.AIR_CONTROL_KEY, 1.0)
+
+
+func _test_brake_inputs() -> void:
+	var view: Node = _game.get("_view")
+	var world: Node = view.get("world")
+	var car: Node = world.get("car")
+	_game.call("_set_reduced_motion_enabled", false)
+	_game.call("_set_intense_effects_enabled", true)
+	Input.action_press(Options.BRAKE)
+	for frame in 15:
+		_game.call("_update_round", 1.0 / 60.0, 0.0)
+	_expect(float(car.get("brake_level")) > 0.99,
+		"The registered keyboard/gamepad brake action must animate the actual rear lamps.")
+	Input.action_release(Options.BRAKE)
+	for frame in 40:
+		_game.call("_update_round", 1.0 / 60.0, 0.0)
+	_expect(float(car.get("brake_level")) < 0.001,
+		"Releasing real brake input must let the lamps finish fading.")
+	var controls: Node = _game.get("_controls")
+	var button: Button = controls.get("buttons")[Options.BRAKE]
+	_touch(3, button.get_global_rect().get_center(), true)
+	_game.call("_update_round", 0.2, 0.0)
+	_expect(float(car.get("brake_level")) > 0.98,
+		"The mobile brake pedal must use the same live rear-light animation.")
+	_touch(3, button.get_global_rect().get_center(), false)
+	_game.call("_set_reduced_motion_enabled", true)
+	Input.action_press(Options.BRAKE)
+	_game.call("_update_round", 1.0 / 60.0, 0.0)
+	_expect(is_equal_approx(float(car.get("brake_level")), 1.0),
+		"Reduced motion must retain immediate, input-driven brake feedback.")
+	Input.action_release(Options.BRAKE)
+	_game.call("_on_play_again_pressed")
+	_expect(not bool(view.get("braking")) and is_zero_approx(float(car.get("brake_level"))),
+		"Replay must clear brake state and emission rather than carry it into the next run.")
 
 
 func _test_real_finish() -> void:

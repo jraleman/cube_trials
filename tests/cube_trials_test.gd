@@ -5,6 +5,7 @@ extends SceneTree
 const State = preload("res://games/cube_trials/trial_state.gd")
 const Course = preload("res://games/cube_trials/course.gd")
 const Driver = preload("res://games/cube_trials/tests/driver_fixture.gd")
+const Tuning = preload("res://games/cube_trials/vehicle_tuning.gd")
 
 var _failures := PackedStringArray()
 
@@ -33,8 +34,14 @@ func _test_suspension_and_controls() -> void:
 	var state := State.new()
 	for frame in 600:
 		state.advance(1.0 / 60.0, 0.0, 0.0, 0.0)
-	_expect(state.contacts == 2 and absf(state.position.y - 574.6) < 3.0,
-		"Both springs must support a stationary Cube without sinking or bouncing away.")
+	var clearance := Course.ground_height(state.position.x) - state.position.y
+	_expect(state.contacts == 2 and absf(clearance - Tuning.RIDE_HEIGHT) < 0.75
+		and clearance < 40.0 and absf(state.velocity.y) < 0.05,
+		"The short springs must settle at the stock ride height without sinking or bouncing.")
+	for index in 2:
+		var wheel_bottom := state.wheel_centers[index].y + State.WHEEL_RADIUS
+		_expect(absf(wheel_bottom - Course.ground_height(state.wheel_centers[index].x)) < 0.05,
+			"The smaller tires must remain on the collision surface at rest.")
 	_expect(state.elapsed == 0.0 and state.recoveries == 0,
 		"The clock waits for the driver and idle suspension cannot crash.")
 	for frame in 36:
@@ -116,7 +123,7 @@ func _test_crash_and_recovery() -> void:
 
 func _test_finish_rules() -> void:
 	var state := State.new()
-	state.position = Vector2(Course.FINISH_X + 100, 610 - 77)
+	state.position = Vector2(Course.FINISH_X + 100, 610 - Tuning.RIDE_HEIGHT)
 	state.advance(State.STEP, 0.0, 0.0, 0.0)
 	_expect(not state.finished, "The garage cannot complete a run with missing plugs.")
 	state.collected.fill(true)

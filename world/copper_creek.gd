@@ -10,6 +10,9 @@ const State = preload("res://games/cube_trials/trial_state.gd")
 const ROAD_HALF_WIDTH := 3.2
 const TIRE_CLEARANCE := State.WHEEL_RADIUS * Art.WORLD_SCALE - 0.15
 const HILL_ROWS: Array[float] = [-3.3, -8.0, -16.0, -25.0, -34.0, -44.0]
+## Where a checkpoint's cloth and its wording sit above the foot of its mast.
+const CHECKPOINT_FLAG_OFFSET := Vector3(0, 3.5, 0)
+const CHECKPOINT_LABEL_OFFSET := Vector3(0.5, 4.08, 0)
 
 var car: Cube
 var plugs: Array[Node3D] = []
@@ -40,8 +43,10 @@ func _ready() -> void:
 
 
 ## Rendering reads the model; it never steps physics or changes checkpoint ownership.
-func present(state: State, time: float, reduced: bool, intense: bool, braking: bool) -> void:
-	car.apply_state(state, braking)
+func present(
+	state: State, time: float, reduced: bool, intense: bool, braking: bool, delta := 0.0
+) -> void:
+	car.apply_state(state, braking, delta, reduced, intense)
 	for index in plugs.size():
 		plugs[index].visible = not state.collected[index]
 		plugs[index].rotation.y = 0.0 if reduced else time * 0.75 + index * 0.35
@@ -91,7 +96,7 @@ func _build_terrain() -> void:
 				var far_z := depths[strip]
 				road.quad(a + Vector3(0, 0, near_z), b + Vector3(0, 0, near_z),
 					b + Vector3(0, 0, far_z), a + Vector3(0, 0, far_z), colors[strip])
-			for z: float in [-1.07, 1.07]:
+			for z: float in [-Cube.WHEEL_Z, Cube.WHEEL_Z]:
 				road.quad(a + Vector3(0, 0.018, z + 0.18),
 					b + Vector3(0, 0.018, z + 0.18),
 					b + Vector3(0, 0.018, z - 0.18),
@@ -194,14 +199,10 @@ func _build_scenery() -> void:
 					position + offset + Vector3(0.04, 0.23 + blade * 0.06, -0.04),
 					Color("8b985b") if index % 2 == 0 else Color("667b4b"))
 		if index % 3 == 0:
-			var post := ground + Vector3(0, 0, -2.92)
-			wood.box(post + Vector3(0, 0.63, 0), Vector3(0.13, 1.30, 0.13),
-				Color("74644a"), Vector3(0, 0, -0.025))
-			wood.box(post + Vector3(0, 0.82, 0), Vector3(1.55, 0.10, 0.10),
-				Color("b29c70"))
+			fence_parts(wood, ground + Vector3(0, 0, -2.92))
 		if index % 4 == 0:
 			var tree_at := _terrain_point(x + 1.0, -7.5 - index % 3 * 3.0)
-			_tree(wood, foliage, tree_at, 0.8 + float(index % 5) * 0.13)
+			tree_parts(wood, foliage, tree_at, 0.8 + float(index % 5) * 0.13)
 		if index % 7 == 0:
 			var rock_at := _terrain_point(x - 0.3, -4.0)
 			stones.ellipsoid(rock_at + Vector3(0, 0.35, 0),
@@ -209,26 +210,19 @@ func _build_scenery() -> void:
 	for sign: Dictionary in Course.SIGNS:
 		var x: float = sign["x"]
 		var base := Art.world_point(Vector2(x, Course.ground_height(x)), -3.0)
-		for offset: float in [-1.08, 1.08]:
-			wood.box(base + Vector3(offset, 1.55, 0), Vector3(0.12, 3.10, 0.12),
-				Color("756147"))
-		details.rounded_box(base + Vector3(0, 3.0, 0),
-			Vector3(3.15, 0.92, 0.15), 0.065, Color("2f5146"))
-		details.box(base + Vector3(0, 3.0, 0.083),
-			Vector3(2.98, 0.76, 0.02), Color("d0c196"))
-		details.box(base + Vector3(0, 3.0, 0.101),
-			Vector3(2.92, 0.70, 0.015), Color("345a4b"))
-		_label(sign["title"], base + Vector3(0, 3.16, 0.13), 48, 0.006, Art.CREAM, false)
-		_label(sign["detail"], base + Vector3(0, 2.84, 0.13), 32, 0.0042, Art.CREAM, false)
-	_mesh("RoadsideTimber", wood, Art.material(0.96))
-	var grass_material := Art.material(0.95)
-	grass_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_mesh("PinesAndShoulderGrass", foliage, grass_material)
+		sign_parts(wood, details, base)
+		for label in sign_labels(sign["title"], sign["detail"], base):
+			add_child(label)
+	_mesh("RoadsideTimber", wood, timber_material())
+	_mesh("PinesAndShoulderGrass", foliage, foliage_material())
 	_mesh("ScatteredQuarryStones", stones, Art.material(1.0))
-	_mesh("TrailSignBoards", details, Art.material(0.8))
+	_mesh("TrailSignBoards", details, signage_material())
 
 
-func _tree(wood: Builder, leaves: Builder, at: Vector3, scale_factor: float) -> void:
+## Copper Creek's roadside pine: a tapered trunk under four turned tiers.
+static func tree_parts(
+	wood: Builder, leaves: Builder, at: Vector3, scale_factor: float
+) -> void:
 	wood.cylinder(at + Vector3.UP * 1.75 * scale_factor, 0.11 * scale_factor,
 		3.5 * scale_factor, Color("786345"), Vector3.ZERO, 8, 0.62)
 	for tier in 4:
@@ -236,6 +230,35 @@ func _tree(wood: Builder, leaves: Builder, at: Vector3, scale_factor: float) -> 
 		var center := at + Vector3.UP * (1.5 + tier * 0.63) * scale_factor
 		leaves.cylinder(center, (1.22 - tier * 0.22) * scale_factor, height,
 			Color("456c53").lightened(tier * 0.026), Vector3(0, tier * 0.43, 0), 9, 0.0)
+
+
+## One bay of trail fence: a leaning post and the rail it carries.
+static func fence_parts(wood: Builder, post: Vector3) -> void:
+	wood.box(post + Vector3(0, 0.63, 0), Vector3(0.13, 1.30, 0.13),
+		Color("74644a"), Vector3(0, 0, -0.025))
+	wood.box(post + Vector3(0, 0.82, 0), Vector3(1.55, 0.10, 0.10),
+		Color("b29c70"))
+
+
+## A trail sign: two posts under a rounded board, its cream plate and its panel.
+static func sign_parts(wood: Builder, details: Builder, base: Vector3) -> void:
+	for offset: float in [-1.08, 1.08]:
+		wood.box(base + Vector3(offset, 1.55, 0), Vector3(0.12, 3.10, 0.12),
+			Color("756147"))
+	details.rounded_box(base + Vector3(0, 3.0, 0),
+		Vector3(3.15, 0.92, 0.15), 0.065, Color("2f5146"))
+	details.box(base + Vector3(0, 3.0, 0.083),
+		Vector3(2.98, 0.76, 0.02), Color("d0c196"))
+	details.box(base + Vector3(0, 3.0, 0.101),
+		Vector3(2.92, 0.70, 0.015), Color("345a4b"))
+
+
+## The two lines a sign board is drawn around, at the sizes it was drawn for.
+static func sign_labels(title: String, detail: String, base: Vector3) -> Array[Label3D]:
+	return [
+		trail_label(title, base + Vector3(0, 3.16, 0.13), 48, 0.006, Art.CREAM, false),
+		trail_label(detail, base + Vector3(0, 2.84, 0.13), 32, 0.0042, Art.CREAM, false),
+	]
 
 
 func _build_water_and_clouds() -> void:
@@ -260,17 +283,8 @@ func _build_water_and_clouds() -> void:
 
 
 func _build_pickups() -> void:
-	var parts := Builder.new()
-	parts.cylinder(Vector3(0, 0.05, 0), 0.13, 0.48, Art.CREAM, Vector3.ZERO, 16)
-	for rib in 5:
-		parts.torus(Vector3(0, -0.10 + rib * 0.075, 0), 0.12, 0.16, Art.CREAM)
-	parts.cylinder(Vector3(0, -0.24, 0), 0.19, 0.12, Color("b5b5a0"),
-		Vector3.ZERO, 6)
-	parts.cylinder(Vector3(0, -0.36, 0), 0.085, 0.14, Color("878f84"))
-	parts.cylinder(Vector3(0, 0.37, 0), 0.065, 0.16, Color("cacdb9"))
-	parts.torus(Vector3.ZERO, 0.55, 0.575, Color("e6c77d"), Vector3(PI / 2, 0, 0))
-	var mesh := parts.finish()
-	var finish := Art.material(0.4, 0.18)
+	var mesh := plug_mesh()
+	var finish := plug_material()
 	for index in Course.PLUG_X.size():
 		var root := Node3D.new()
 		root.name = "SparkPlug%d" % (index + 1)
@@ -280,17 +294,35 @@ func _build_pickups() -> void:
 		model.mesh = mesh
 		model.material_override = finish
 		root.add_child(model)
-		var number := Label3D.new()
-		number.text = str(index + 1)
-		number.font_size = 54
-		number.pixel_size = 0.007
-		number.position.y = 0.82
-		number.modulate = Art.CREAM
-		number.outline_modulate = Art.INK
-		number.outline_size = 10
-		number.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		root.add_child(number)
+		root.add_child(plug_label(index))
 		plugs.append(root)
+
+
+## A numbered spark plug: ceramic body and ribs, hex collar, electrode and the
+## gold ring that says it can still be driven through.
+static func plug_mesh() -> ArrayMesh:
+	var parts := Builder.new()
+	parts.cylinder(Vector3(0, 0.05, 0), 0.13, 0.48, Art.CREAM, Vector3.ZERO, 16)
+	for rib in 5:
+		parts.torus(Vector3(0, -0.10 + rib * 0.075, 0), 0.12, 0.16, Art.CREAM)
+	parts.cylinder(Vector3(0, -0.24, 0), 0.19, 0.12, Color("b5b5a0"),
+		Vector3.ZERO, 6)
+	parts.cylinder(Vector3(0, -0.36, 0), 0.085, 0.14, Color("878f84"))
+	parts.cylinder(Vector3(0, 0.37, 0), 0.065, 0.16, Color("cacdb9"))
+	parts.torus(Vector3.ZERO, 0.55, 0.575, Color("e6c77d"), Vector3(PI / 2, 0, 0))
+	return parts.finish()
+
+
+static func plug_material() -> StandardMaterial3D:
+	return Art.material(0.4, 0.18)
+
+
+## Each plug carries its own number, so the five are told apart by reading rather
+## than by counting backwards along the trail.
+static func plug_label(index: int) -> Label3D:
+	var number := trail_label(str(index + 1), Vector3(0, 0.82, 0), 54, 0.007, Art.CREAM)
+	number.outline_size = 10
+	return number
 
 
 func _build_checkpoints() -> void:
@@ -298,22 +330,43 @@ func _build_checkpoints() -> void:
 	for index in range(1, Course.CHECKPOINT_X.size()):
 		var x := Course.CHECKPOINT_X[index]
 		var base := Art.world_point(Vector2(x, Course.ground_height(x)), -2.8)
-		posts.cylinder(base + Vector3.UP * 1.85, 0.065, 3.70, Color("665b43"))
-		posts.ellipsoid(base + Vector3.UP * 3.72, Vector3.ONE * 0.15, Art.COPPER)
-		var fabric := Builder.new()
-		fabric.quad(Vector3.ZERO, Vector3(0, -0.70, 0),
-			Vector3(1.15, -0.58, 0), Vector3(1.26, 0.10, 0), Color.WHITE)
-		var finish := Art.material(0.9)
-		finish.albedo_color = Art.CREAM
-		finish.cull_mode = BaseMaterial3D.CULL_DISABLED
-		var flag := _mesh("Checkpoint%dFlag" % index, fabric, finish)
-		flag.position = base + Vector3(0, 3.5, 0)
+		checkpoint_mast_parts(posts, base)
+		var finish := checkpoint_flag_material()
+		var flag := MeshInstance3D.new()
+		flag.name = "Checkpoint%dFlag" % index
+		flag.mesh = checkpoint_flag_mesh()
+		flag.material_override = finish
+		flag.position = base + CHECKPOINT_FLAG_OFFSET
+		add_child(flag)
 		_flag_materials.append(finish)
 		checkpoint_flags.append(flag)
 		var label := _label("CHECKPOINT %d" % index,
-			base + Vector3(0.5, 4.08, 0), 42, 0.006, Art.CREAM)
+			base + CHECKPOINT_LABEL_OFFSET, 42, 0.006, Art.CREAM)
 		checkpoint_labels.append(label)
-	_mesh("CheckpointMasts", posts, Art.material(0.8))
+	_mesh("CheckpointMasts", posts, signage_material())
+
+
+## A checkpoint mast and the copper finial on top of it.
+static func checkpoint_mast_parts(posts: Builder, base: Vector3) -> void:
+	posts.cylinder(base + Vector3.UP * 1.85, 0.065, 3.70, Color("665b43"))
+	posts.ellipsoid(base + Vector3.UP * 3.72, Vector3.ONE * 0.15, Art.COPPER)
+
+
+## The cloth itself, which turns teal once the checkpoint has saved a run.
+static func checkpoint_flag_mesh() -> ArrayMesh:
+	var fabric := Builder.new()
+	fabric.quad(Vector3.ZERO, Vector3(0, -0.70, 0),
+		Vector3(1.15, -0.58, 0), Vector3(1.26, 0.10, 0), Color.WHITE)
+	return fabric.finish()
+
+
+## Tinted rather than vertex-painted, because the colour is live state, and
+## two-sided because a flag is looked at from both ends of the trail.
+static func checkpoint_flag_material() -> StandardMaterial3D:
+	var finish := Art.material(0.9)
+	finish.albedo_color = Art.CREAM
+	finish.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return finish
 
 
 func _build_garage() -> void:
@@ -322,6 +375,22 @@ func _build_garage() -> void:
 	var x := (Course.FINISH_X + 100.0) * Art.WORLD_SCALE
 	var y := Art.world_point(Vector2(Course.FINISH_X, Course.ground_height(Course.FINISH_X))).y
 	var at := Vector3(x, y, -4.9)
+	garage_parts(parts, metal, at)
+	var labels := garage_labels("BRING ALL FIVE PLUGS", at)
+	for label in labels:
+		add_child(label)
+	garage_label = labels[1]
+	for index in 5:
+		var light := garage_lamp(index, at)
+		add_child(light)
+		_garage_lamps.append(light)
+	_mesh("CopperCreekServiceGarage", parts, signage_material())
+	_mesh("GarageFittings", metal, fitting_material())
+
+
+## The trail service garage measured from the apron it stands on: shed, roof,
+## roller door, side door, fascia, gate posts, parking marks and its barrels.
+static func garage_parts(parts: Builder, metal: Builder, at: Vector3) -> void:
 	parts.rounded_box(at + Vector3(0, 1.9, -0.4), Vector3(9.0, 3.8, 3.8),
 		0.05, Color("517060"))
 	for stripe in 23:
@@ -341,36 +410,89 @@ func _build_garage() -> void:
 		Art.CREAM, Vector3(PI / 2, 0, 0))
 	parts.rounded_box(at + Vector3(0, 4.57, 0.7), Vector3(6.8, 0.76, 0.15),
 		0.065, Art.INK)
-	_label("COPPER CREEK / TRAIL SERVICE", at + Vector3(0, 4.58, 0.80),
-		44, 0.0058, Art.CREAM, false)
-	garage_label = _label("BRING ALL FIVE PLUGS", at + Vector3(0.7, 3.48, 1.73),
-		40, 0.0055, Art.CREAM, false)
-	for index in 5:
-		var light := MeshInstance3D.new()
-		light.name = "DeliveredPlug%d" % (index + 1)
-		var bulb := SphereMesh.new()
-		bulb.radius = 0.10
-		bulb.height = 0.20
-		light.mesh = bulb
-		light.material_override = Art.material(0.35)
-		light.position = at + Vector3(-0.4 + index * 0.55, 3.10, 1.8)
-		add_child(light)
-		_garage_lamps.append(light)
 	for side: float in [-1.0, 1.0]:
-		var post := Vector3(x + side * 4.30, y, -2.85)
-		parts.cylinder(post + Vector3.UP * 0.5, 0.11, 1.0, Art.COPPER, Vector3.ZERO, 10)
-		parts.box(Vector3(x + side * 3.4, y + 0.027, 0),
+		parts.cylinder(at + Vector3(side * 4.30, 0.5, 2.05), 0.11, 1.0,
+			Art.COPPER, Vector3.ZERO, 10)
+		parts.box(at + Vector3(side * 3.4, 0.027, 4.9),
 			Vector3(0.075, 0.035, 4.8), Art.CREAM)
 	for mark in 12:
-		parts.box(Vector3(x - 3.3 + mark * 0.6, y + 0.03, 2.43),
+		parts.box(at + Vector3(-3.3 + mark * 0.6, 0.03, 7.33),
 			Vector3(0.58, 0.05, 0.24), Art.CREAM if mark % 2 == 0 else Art.INK)
 	for barrel in 3:
 		var spot := at + Vector3(5.2 + (barrel % 2) * 0.65, 0.50, 0.6 - barrel * 0.25)
 		parts.cylinder(spot, 0.30, 0.95, Color("a16c48"), Vector3.ZERO, 16)
 		metal.torus(spot + Vector3.UP * 0.25, 0.295, 0.31, Color("636956"))
 		metal.torus(spot - Vector3.UP * 0.25, 0.295, 0.31, Color("636956"))
-	_mesh("CopperCreekServiceGarage", parts, Art.material(0.8))
-	_mesh("GarageFittings", metal, Art.material(0.55, 0.35))
+
+
+## The fascia name and the live delivery instruction, in that order.
+static func garage_labels(status: String, at: Vector3) -> Array[Label3D]:
+	return [
+		trail_label("COPPER CREEK / TRAIL SERVICE", at + Vector3(0, 4.58, 0.80),
+			44, 0.0058, Art.CREAM, false),
+		trail_label(status, at + Vector3(0.7, 3.48, 1.73), 40, 0.0055, Art.CREAM, false),
+	]
+
+
+## One of the five bulbs over the door, lit as each plug is delivered.
+static func garage_lamp(index: int, at: Vector3) -> MeshInstance3D:
+	var light := MeshInstance3D.new()
+	light.name = "DeliveredPlug%d" % (index + 1)
+	var bulb := SphereMesh.new()
+	bulb.radius = 0.10
+	bulb.height = 0.20
+	light.mesh = bulb
+	light.material_override = Art.material(0.35)
+	light.position = at + Vector3(-0.4 + index * 0.55, 3.10, 1.8)
+	return light
+
+
+# --------------------------------------------------------------------------
+# Shared finishes and signage
+# --------------------------------------------------------------------------
+
+## Named rather than repeated, so a model on a gallery plinth cannot be given a
+## nicer finish than the same model has out on the trail.
+
+
+static func timber_material() -> StandardMaterial3D:
+	return Art.material(0.96)
+
+
+## Two-sided: pine tiers and grass blades are open sheets seen from both ends.
+static func foliage_material() -> StandardMaterial3D:
+	var finish := Art.material(0.95)
+	finish.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return finish
+
+
+static func signage_material() -> StandardMaterial3D:
+	return Art.material(0.8)
+
+
+static func fitting_material() -> StandardMaterial3D:
+	return Art.material(0.55, 0.35)
+
+
+## Every word Copper Creek says in the world is a Label3D built here, so the
+## trail and the gallery cannot word or size their signage differently.
+static func trail_label(
+	text: String, at: Vector3, font_size: int, pixel_size: float,
+	color: Color, billboard := true
+) -> Label3D:
+	var label := Label3D.new()
+	label.text = text
+	label.font_size = font_size
+	label.pixel_size = pixel_size
+	label.modulate = color
+	label.outline_modulate = Art.INK
+	label.outline_size = 6 if billboard else 0
+	label.billboard = (
+		BaseMaterial3D.BILLBOARD_ENABLED if billboard
+		else BaseMaterial3D.BILLBOARD_DISABLED
+	)
+	label.position = at
+	return label
 
 
 func _build_dust() -> void:
@@ -405,7 +527,7 @@ func _update_dust(state: State, time: float, enabled: bool) -> void:
 	for index in 14:
 		var age := fposmod(time * 1.6 + index / 14.0, 1.0)
 		var at := origin + Vector3(-age * state.velocity.x * 0.003,
-			-TIRE_CLEARANCE + age * 0.45, -0.9 if index % 2 == 0 else 0.9)
+			-TIRE_CLEARANCE + age * 0.45, -Cube.WHEEL_Z if index % 2 == 0 else Cube.WHEEL_Z)
 		var scale_factor := 0.12 + age * 0.55
 		_dust.multimesh.set_instance_transform(index,
 			Transform3D(Basis.from_scale(Vector3.ONE * scale_factor), at))
@@ -425,14 +547,6 @@ func _label(
 	text: String, at: Vector3, font_size: int, pixel_size: float,
 	color: Color, billboard := true
 ) -> Label3D:
-	var label := Label3D.new()
-	label.text = text
-	label.font_size = font_size
-	label.pixel_size = pixel_size
-	label.modulate = color
-	label.outline_modulate = Art.INK
-	label.outline_size = 6 if billboard else 0
-	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED if billboard else BaseMaterial3D.BILLBOARD_DISABLED
-	label.position = at
+	var label := trail_label(text, at, font_size, pixel_size, color, billboard)
 	add_child(label)
 	return label
