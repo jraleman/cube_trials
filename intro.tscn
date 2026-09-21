@@ -1,0 +1,9 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/boot/intro.tscn" id="1_intro"]
+
+[node name="CubeTrialsIntro" instance=ExtResource("1_intro")]
+cards = Array[String](["A brown Nissan Cube.\nA very unreasonable commute.", "Five spark plugs.\nOne little car.\nBring it home."])
+hold = 1.8
+fade_in = 0.5
+fade_out = 0.4

@@ -1,0 +1,31 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" path="res://scenes/game/game_shell.tscn" id="1_shell"]
+[ext_resource type="Script" path="res://games/cube_trials/gameplay.gd" id="2_game"]
+
+[node name="CubeTrials" instance=ExtResource("1_shell")]
+script = ExtResource("2_game")
+
+[node name="Caption" parent="HUD/RoundOver/Center/ScorePanel/Layout/Overview/Duration/Layout" index="0"]
+text = "TIME + PENALTIES"
+
+[node name="Caption" parent="HUD/RoundOver/Center/ScorePanel/Layout/Overview/Hits/Layout" index="0"]
+text = "SPARK PLUGS"
+
+[node name="Caption" parent="HUD/RoundOver/Center/ScorePanel/Layout/Overview/Accuracy/Layout" index="0"]
+text = "COLLECTED"
+
+[node name="HitsCaption" parent="HUD/RoundOver/Center/ScorePanel/Layout/Report/Players/PlayerOne/Layout/Stats" index="0"]
+text = "Spark plugs"
+
+[node name="MissesCaption" parent="HUD/RoundOver/Center/ScorePanel/Layout/Report/Players/PlayerOne/Layout/Stats" index="2"]
+text = "Recoveries (+5s)"
+
+[node name="AccuracyCaption" parent="HUD/RoundOver/Center/ScorePanel/Layout/Report/Players/PlayerOne/Layout/Stats" index="4"]
+text = "Collected"
+
+[node name="StreakCaption" parent="HUD/RoundOver/Center/ScorePanel/Layout/Report/Players/PlayerOne/Layout/Stats" index="6"]
+visible = false
+
+[node name="PlayerOneStatsStreak" parent="HUD/RoundOver/Center/ScorePanel/Layout/Report/Players/PlayerOne/Layout/Stats" index="7"]
+visible = false
