@@ -9,6 +9,7 @@ const Finish = preload("res://games/cube_trials/world/cube_finish.gd")
 const GAME_ID := "cube_trials"
 const AIR_CONTROL_KEY := "game/cube_trials_air_control"
 const ENGINE_AUDIO_KEY := "game/cube_trials_engine_audio"
+const DAY_NIGHT_KEY := "game/cube_trials_day_night"
 const THROTTLE := &"cube_trials_throttle"
 const REVERSE := &"cube_trials_reverse"
 const NOSE_UP := &"cube_trials_nose_up"
@@ -28,6 +29,14 @@ const TUNABLES: Array[Dictionary] = [
 		"key": ENGINE_AUDIO_KEY, "type": GameManifest.OPTION_TOGGLE,
 		"default": true, "title": "Engine sound", "heading": "Cube Trials - live",
 		"description": "Play the car's continuous engine hum. Event sounds remain enabled.",
+	},
+	{
+		"key": DAY_NIGHT_KEY, "type": GameManifest.OPTION_TOGGLE,
+		"default": true, "title": "Day / night cycle", "heading": "Cube Trials - live",
+		"description": (
+			"A gentle four-minute cycle with automatic headlights. "
+			+ "Turn off for steady afternoon light. Reduced motion also keeps daylight."
+		),
 	},
 ]
 
@@ -407,9 +416,9 @@ const GALLERY_EXHIBITS: Array[Dictionary] = [
 			+ "Copper Creek and all five have to reach the garage."
 		),
 		"facts": [
-			"Ceramic ribs, a six-sided collar, an electrode and a gold ring",
+			"Imported ceramic ribs, blue bands, hex shell and hooked electrode",
 			"Worth 1,000 points each",
-			"Its number is real 3D text, so a plug is never only a shape",
+			"A gold pickup ring and real 3D number surround the enlarged model",
 			"Turns and bobs in play unless Reduced motion parks it",
 		],
 	},
@@ -425,8 +434,8 @@ const GALLERY_EXHIBITS: Array[Dictionary] = [
 		),
 		"facts": [
 			"Two stand on the trail; the start line is the third",
-			"A 3.70-unit mast under a copper finial",
-			"Cream until the checkpoint saves, then teal — and it says so too",
+			"Imported checker cloth, wooden pole, gold finial and stone footing",
+			"Gold until the checkpoint saves, then teal - and it says so too",
 		],
 	},
 	{
@@ -450,15 +459,15 @@ const GALLERY_EXHIBITS: Array[Dictionary] = [
 		"title": "Roadside Pine",
 		"heading": "Copper Creek",
 		"badge": "PINE",
-		"color": Color("456c53"),
+		"color": Color("537b38"),
 		"description": (
 			"The tree the hillside is planted with, standing behind the road's "
 			+ "shoulder where the car cannot reach it."
 		),
 		"facts": [
-			"A tapered trunk under four cones, each turned a little further",
-			"Each tier is lightened slightly toward the top",
-			"Planted between 0.80x and 1.32x along the trail; shown at 1.06x",
+			"Original Blender foliage: 6,064 triangles with a flared trunk",
+			"Thirteen branch whorls with serrated fronds in three greens",
+			"Fitted to trail height, then varied from 0.80x to 1.32x; shown at 1.06x",
 		],
 	},
 	{
@@ -480,16 +489,16 @@ const GALLERY_EXHIBITS: Array[Dictionary] = [
 	},
 	{
 		"id": EXHIBIT_GARAGE,
-		"title": "Copper Creek Trail Service",
+		"title": "Copper Creek Body Shop",
 		"heading": "The finish",
 		"badge": "HOME",
-		"color": Color("517060"),
+		"color": Color("a14535"),
 		"description": (
 			"The end of the commute, shown with every plug delivered. Brake "
 			+ "inside it and the drive is over."
 		),
 		"facts": [
-			"Roller door, side door, fascia, gate posts and three oil drums",
+			"Imported open service bay, lift, office, signs and furnished yard",
 			"Five bulbs over the door, one per plug delivered",
 			"Its sign is the finish rule, and it changes when all five arrive",
 		],

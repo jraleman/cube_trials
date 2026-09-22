@@ -18,6 +18,7 @@ const BODY_SCALE := Vector3.ONE * MODEL_SCALE
 const BODY_OFFSET := Vector3(0, -Tuning.BODY_ORIGIN_HEIGHT * MODEL_SCALE, 0)
 const BRAKE_EMISSION := 1.8
 const BRAKE_COLOR := Color("ff2820")
+const HEADLIGHT_MATERIAL := "Cube Bulb"
 const WHEEL_NODES := [
 	["RearLeftWheel", "RearRightWheel"], ["FrontLeftWheel", "FrontRightWheel"],
 ]
@@ -29,6 +30,8 @@ var wheels: Array[Node3D] = []
 var springs: Array[MeshInstance3D] = []
 var brake_lights: Array[OmniLight3D] = []
 var brake_level := 0.0
+var headlights: Array[SpotLight3D] = []
+var headlight_level := 0.0
 ## Store item ids, or "" for the factory coat and alloys. Assigning before
 ## [method build] dresses the car as it is assembled; [method set_finish]
 ## repaints one that is already standing.
@@ -40,6 +43,9 @@ var _rims: Array[MeshInstance3D] = []
 var _paint_sample: Node3D
 var _brake_material: StandardMaterial3D
 var _brake_color := Color.WHITE
+var _headlight_mesh: MeshInstance3D
+var _headlight_material: StandardMaterial3D
+var _headlight_surface := -1
 var _built := false
 
 
@@ -58,6 +64,7 @@ func build() -> void:
 	_build_imported_model()
 	_build_suspension()
 	_build_brake_lights()
+	_build_headlights()
 	for index in 2:
 		var mount := Vector3(State.AXLES[index].x, -State.AXLES[index].y, 0) * S
 		axles[index].position = mount + Vector3.DOWN * Tuning.STATIC_LENGTH * S
@@ -85,7 +92,7 @@ func _apply_finish() -> void:
 ## Pitch, wheel travel and wheel rotation remain essential under reduced motion.
 func apply_state(
 	state: State, braking := false, delta := 0.0,
-	reduced_motion := false, intense_effects := true
+	reduced_motion := false, intense_effects := true, night_amount := 0.0
 ) -> void:
 	build()
 	position = Art.world_point(state.position)
@@ -108,6 +115,7 @@ func apply_state(
 	for light in brake_lights:
 		light.visible = intense_effects and not reduced_motion and brake_level > 0.01
 		light.light_energy = brake_level * 0.7
+	_update_headlights(night_amount)
 
 
 func paint_sample() -> Vector3:
@@ -261,3 +269,42 @@ func _build_brake_lights() -> void:
 		light.visible = false
 		chassis.add_child(light)
 		brake_lights.append(light)
+
+
+func _build_headlights() -> void:
+	_headlight_mesh = chassis.get_node("HeadlightsAndIndicators") as MeshInstance3D
+	for surface in _headlight_mesh.mesh.get_surface_count():
+		var exported := _headlight_mesh.mesh.surface_get_material(surface) as StandardMaterial3D
+		if exported != null and exported.resource_name == HEADLIGHT_MATERIAL:
+			_headlight_surface = surface
+			_headlight_material = exported.duplicate() as StandardMaterial3D
+			break
+	assert(_headlight_material != null,
+		"The imported headlights must retain their separate 'Cube Bulb' material.")
+	_headlight_material.emission_enabled = true
+	_headlight_material.emission = Art.CREAM
+	for side: float in [-1.0, 1.0]:
+		var light := SpotLight3D.new()
+		light.name = "LeftHeadlight" if side < 0 else "RightHeadlight"
+		light.position = Vector3(2.005, 0.837, side * 0.644) * MODEL_SCALE + BODY_OFFSET
+		light.basis = Basis.looking_at(Vector3(1, -0.17, 0))
+		light.light_color = Art.CREAM
+		light.spot_range = 12.0
+		light.spot_angle = 33.0
+		light.spot_attenuation = 1.15
+		light.light_specular = 0.35
+		light.shadow_enabled = false
+		light.light_energy = 0.0
+		light.visible = false
+		chassis.add_child(light)
+		headlights.append(light)
+
+
+func _update_headlights(night_amount: float) -> void:
+	headlight_level = clampf(night_amount, 0.0, 1.0)
+	_headlight_material.emission_energy_multiplier = headlight_level * 2.0
+	_headlight_mesh.set_surface_override_material(_headlight_surface,
+		_headlight_material if headlight_level > 0.0 else null)
+	for light in headlights:
+		light.light_energy = headlight_level * 2.0
+		light.visible = headlight_level > 0.01

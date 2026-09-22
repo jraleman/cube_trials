@@ -41,22 +41,23 @@ course.gd                  # single source of terrain, pickups and checkpoints
 course_view.gd             # isolated SubViewport, follow camera and scenery blur
 drive_controls.gd          # keyboard, gamepad and multitouch input
 cube_audio.gd              # synthesized engine hum and event cues
-cube_art.gd                # palette and daylight shared by every renderer
+cube_art.gd                # palette and lighting entry point shared by every renderer
 share_art.gd / .tscn       # score-share portrait in its own 3D studio viewport
 gallery_stage.gd / .tscn   # turntable for the shared Gallery screen's plinths
 store_preview.gd / .tscn   # the car or wheel on a shared Store screen card
-world/copper_creek.gd      # terrain extruded from the exact collision profile
-world/cube_model.gd        # imported car, physics-driven wheels and animated brake lights
+world/copper_creek.gd      # exact terrain, shared imported prop factories and live feedback
+world/daylight.gd          # shared sun/sky rig and the optional day/night cycle
+world/cube_model.gd        # imported car, suspension, brake lights and automatic headlights
 world/cube_finish.gd       # what each bought paint and wheel finish looks like
 world/nissan_cube.tscn     # reusable stock-proportion car using the same adapter
 world/mesh_builder.gd      # batches original geometry into lit surfaces
 assets/                    # game-icon.png, tutorial_poster.png (both generated)
-assets/models/             # portable nissan_cube.glb and Godot import settings
-assets/shaders/            # subtle speed blur with a protected car region
-tests/                     # four suites plus driver_fixture.gd
+assets/models/             # portable car and reference-prop GLBs, plus Godot import settings
+assets/shaders/            # scenery-only speed blur and a bloom-free parking outline
+tests/                     # five suites plus driver_fixture.gd
 tools/capture_art.gd       # dev-only art capture; excluded from exports
 tools/reference/           # dev-only modeling reference; see its README
-tools/blender/             # editable reference-based Blender car and studio views
+tools/blender/             # editable reference-based car/props, generators and studio views
 ```
 
 ## Running
@@ -82,12 +83,31 @@ godot --path . -- --game=all            # the full collection
 
 Keyboard bindings are generated from `cube_trials_options.gd` and are
 rebindable. The settings **Game** tab exposes live **air control** strength
-(50–150%) and an **engine sound** toggle.
+(50–150%), an **engine sound** toggle, and a **Day / night cycle** toggle.
 
 Braking smoothly brightens the red rear lamps and adds a short-range red glow.
 At speed, a restrained five-sample blur affects scenery only, leaving the car
 and HUD sharp. Blur is capped at 2.25 render pixels and clears when parking,
 pausing, recovering, restarting or finishing.
+
+## Parking and atmosphere
+
+The shop's parking bay has a soft glowing outline aligned with the **actual
+finish interval**, not the decorative stalls beside the building. An amber
+outline counts missing plugs; a mint outline says **PARK HERE** once all five
+are aboard. Entering too quickly shows **SLOW DOWN**, and a successful stop
+changes the signs to **DELIVERED! / DELIVERY COMPLETE**. A crisp, phone-sized
+callout points at the bay instead of relying on small 3D lettering. The five
+delivery bulbs light individually, and pickup rings remain readable after dark.
+
+The shadow-casting sun now follows an optional **four-minute day/night cycle**:
+warm afternoon, sunset, a readable blue night, dawn, then afternoon again.
+Headlights and warm workshop lighting fade on automatically at dusk. The cycle
+starts with the first driving input, freezes during pause and results, and
+resets on replay. Recovery penalties do not advance it. Switch it off in
+**Settings > Game** for steady afternoon light; the gallery, store previews
+and share portraits always keep that studio daylight. Lighting never changes
+the physics, finish requirements, score or achievements.
 
 ## Rules
 
@@ -152,12 +172,14 @@ version of the game than the one you drive.
 | The car | The Brown Nissan Cube, Alloy Wheel and Tire, Coilover Strut |
 | The trail | Numbered Spark Plug, Checkpoint Flag, Trail Sign Board |
 | Copper Creek | Roadside Pine, Trail Fence |
-| The finish | Trail Service Garage |
+| The finish | Copper Creek Body Shop |
 
 The car is shown after its suspension has settled under its own weight, the
 strut at the length a parked car holds it at, and the plug carries the same
 3D-text number the trail hands out. The garage stays locked until the
 `cube_trials_home` achievement is earned, so the finish is not spoiled.
+The pine, plug, checkpoint and workshop use the same generated GLBs as the
+course, including its pickup ring, checkpoint wording and delivery indicators.
 
 Drag the model to turn it, scroll to zoom, or use the on-screen turn, tilt and
 zoom buttons; **Reset** returns to the default framing. Auto-spin is on by
@@ -167,12 +189,14 @@ fully controllable.
 ## Accessibility
 Reduced motion parks clouds, water ripples, pickup and flag motion and tire
 dust, and removes camera smoothing, speed blur and decorative brake-light spill.
+It also keeps afternoon light and stops the parking outline's gentle pulse.
 Driving, wheel rotation, suspension travel and necessary camera tracking remain;
 essential brake lamps respond immediately instead of fading. The shallow camera
 angle keeps the quarry landing visible either way. Disabling intense effects
 independently suppresses tire dust, speed blur and brake-light spill without
-removing the brake lamps. Every meaningful sound also has visible feedback and
-an audio caption.
+removing the brake lamps. It removes the parking halo and pulse, but keeps the
+solid outline, written instructions and essential night lighting. Every
+meaningful sound also has visible feedback and an audio caption.
 
 ## Tests
 
@@ -183,13 +207,15 @@ that complete real rounds.
 godot --headless --path . --script res://games/cube_trials/tests/cube_trials_test.gd -- --game=cube_trials
 godot --headless --path . --script res://games/cube_trials/tests/cube_trials_scene_test.gd -- --game=cube_trials
 godot --headless --path . --script res://games/cube_trials/tests/cube_trials_3d_test.gd -- --game=cube_trials
+godot --headless --path . --script res://games/cube_trials/tests/reference_models_test.gd -- --game=cube_trials
 ```
 
 | Suite | Covers |
 | --- | --- |
 | `cube_trials_test.gd` | Fixed-step physics, stock ride height and contacts, recoveries and a complete input-only drive |
-| `cube_trials_scene_test.gd` | Live rebinding, multitouch and action-driven braking, pause, assists, replay, results and achievements |
-| `cube_trials_3d_test.gd` | Volumetric bodywork, normals, measured stock-like stance, wheel/strut poses, animated brake materials and lights, terrain alignment, 3D pickups and the nine gallery exhibits |
+| `cube_trials_scene_test.gd` | Live rebinding, multitouch, braking, day/night settings and lifecycle, pause, assists, replay, results and achievements |
+| `cube_trials_3d_test.gd` | Car geometry/animation, sun/sky transitions, automatic lights, parking feedback and alignment, imported prop provenance, planting, yard clearance and the nine shared gallery exhibits |
+| `reference_models_test.gd` | The four source GLBs: geometry budgets, finite unit normals, outward-facing plug threads, meter scale, grounded origins, two-sided foliage/cloth and texture-free Compatibility materials |
 | `cube_trials_view_test.gd` | **Graphics window required** — see below |
 
 `driver_fixture.gd` is a shared helper, not a suite; skip `*_fixture.gd` when
@@ -207,7 +233,12 @@ It checks actual 3D geometry and brown bodywork, rendered brake-lamp brightness,
 scenery blur with sharp car/HUD pixels, effect accessibility and reset behavior,
 landscape/portrait/ultrawide layouts, minimum physical touch-target sizes, an
 input-driven quarry jump, results, 3D share art and the standalone title. It
-also measures the viewport's 200-draw / 120,000-triangle budget. Pass an optional
+compares rendered day/night parking outlines, headlight and workshop illumination,
+nighttime car readability, and the portrait parking target with a minimum
+13-physical-pixel callout font. It also checks actual instanced tree transforms,
+imported gallery framing across
+screen sizes and orbit angles, and the viewport's 200-draw / 120,000-triangle
+budget at the start, checkpoints, jump and workshop. Pass an optional
 `--cube-capture-dir=<absolute directory>` to save rendered examples.
 
 ## Regenerating art
@@ -280,6 +311,102 @@ body clearance at rest. Wheel travel, spin and brake animation follow
 To reuse the car in another Godot project, copy just the GLB and let that
 project import it; the reusable scene depends on Cube Trials' scripts.
 
+### Reference-based Blender props
+
+The other four sheets use the same process as the Cube: original,
+script-authored geometry, an editable Blender studio with five inspection
+cameras, a rendered preview, and a separate optimized GLB. The sheets are
+visual drafting aids only; no reference pixels or manufacturer marks are
+embedded in the models.
+
+Each model name below has a `.blend` and `*_preview.png` in `tools\blender\`,
+and a `.glb` with its Godot `.import` sidecar in `assets\models\`.
+
+| Reference | Model name | Exported triangles | Material surfaces |
+| --- | --- | ---: | ---: |
+| `tree.png` | `pine_tree` | 6,064 | 5 |
+| `spark-plug.png` | `spark_plug` | 4,246 | 7 |
+| `check-flag.png` | `checkpoint_flag` | 2,016 | 8 |
+| `car-body-shop.png` | `car_body_shop` | 17,440 | 16 |
+
+The pine has layered, serrated fronds in three greens and a flared trunk. The
+plug has ceramic ribs, blue bands, a hex shell, a faceted thread profile and
+separate electrodes, without the reference's printed logo. The flag has a
+geometric checker on waving swallowtail cloth, a wooden pole, metal clamps,
+finial, stone footing and grass. The workshop includes an open service bay,
+lift, tool cabinets, paneled walls, standing-seam roof, office, signage,
+shelter, bins, tires, barrels, fences and a small forecourt. Its background
+forest and parked vehicle are not included.
+
+Blender uses meters and Z up; the GLBs use meters and Y up, with their base at
+the origin. The pine is 6.03 m tall, the flag 3.60 m tall, and the plug is
+**95.5 mm long**, not pre-enlarged to pickup size. The shop building is
+10 by 8 m, within an approximately 18.30 by 13.90 m yard. Its front points
+along +Z in Godot; the flag flies toward +X. Named mesh groups under
+`PineTree`, `SparkPlug`, `CheckpointFlag` and `CarBodyShop` preserve the main
+parts while batching hundreds of authored objects.
+
+These GLBs now **replace the corresponding course and gallery props** through
+the shared factories in `world\copper_creek.gd`. The source assets remain
+unscaled and reusable: the runtime fits pines to a 4.19 m base height before
+applying the trail's 0.80-1.32 variation, centers a 1 m plug inside its gold
+pickup ring, and uses the workshop at 0.90 scale. The gallery uses those same
+fits rather than a second interpretation of the models.
+
+The forest draws the original trunk and foliage meshes in spatial groups of
+up to three trees using `MultiMeshInstance3D`, keeping both material fidelity
+and local culling. Checkpoint feedback duplicates only each flag's gold field
+material: saving turns it teal without repainting its dark checkers or another
+flag. Cloth sway, pickup spin/bob, visibility and numbers still follow the
+round state and Reduced motion; replay restores the authored colors.
+
+The workshop's furnished yard stays behind the driving lane. Background
+ridges are leveled below its footprint, overlapping roadside clutter is
+cleared, and nearby pines are replanted behind it. Its live instruction board
+and five delivery lamps sit above the open bay, while the added finish
+markings match `Course.FINISH_X` and `Course.FINISH_WIDTH` exactly. Driving
+physics, pickup/checkpoint ownership and finish requirements are unchanged.
+The gallery fits the complete yard while turning and tilting it.
+
+The GLBs themselves have no collision bodies, animation tracks, studio
+objects, texture dependencies or glTF extensions. The pine's foliage and the
+flag's cloth and grass use two-sided materials. Godot generates mesh LODs;
+animation import and unnecessary tangent generation remain disabled.
+
+To rebuild the editable scenes, run from this repository in fresh Blender
+processes. Regeneration replaces the corresponding `.blend`; export alone
+preserves any manual edits to it.
+
+```powershell
+blender --background --factory-startup --python-exit-code 1 --python .\tools\blender\generate_pine_tree.py -- --build-tree
+blender --background --factory-startup --python-exit-code 1 --python .\tools\blender\generate_spark_plug.py -- --build-plug
+blender --background --factory-startup --python-exit-code 1 --python .\tools\blender\generate_checkpoint_flag.py -- --build-flag
+blender --background --factory-startup --python-exit-code 1 --python .\tools\blender\generate_car_body_shop.py -- --build-shop
+```
+
+Export the **saved files**, optionally refreshing their previews:
+
+```powershell
+foreach ($name in "pine_tree", "spark_plug", "checkpoint_flag", "car_body_shop") {
+    blender --background --factory-startup ".\tools\blender\$name.blend" --python-exit-code 1 --python .\tools\blender\export_reference_props.py -- --render-preview
+    if ($LASTEXITCODE -ne 0) { throw "Export failed: $name" }
+}
+```
+
+Omit `--render-preview` to export without rendering. The exporter hashes the
+source before and after, batches by material group, enforces per-model
+triangle/surface budgets and validates a temporary GLB before replacing the
+previous export. It never saves the authoring file. Previews use frame 5
+(three-quarter) for the tree, plug and flag, and frame 1 for the shop.
+The remaining camera markers provide elevations and detail views; the plug's
+bottom view automatically hides the studio floor.
+
+Reimport from `godot-base` with `godot --headless --path . --import`, then run
+the source, 3D integration and graphics suites in **Tests**. Regenerate the
+game artwork after changing a visible model. Only the GLBs and
+their `.import` sidecars belong in runtime assets; the `.blend` files,
+previews and references remain under the development-only `tools` folder.
+
 ## Engine notes
 
 The renderer stays `gl_compatibility`; keep visual dimensions and collision
@@ -293,8 +420,10 @@ only the generated `.godot/` cache is ignored.
 ## Credits and rights
 
 Original game design, code, meshes, synthesized audio and art by DeskCanSaw
-Games. The 3D Nissan Cube is original Blender geometry exported to glTF;
-the terrain and roadside scenery are original geometry built in code.
+Games. The Nissan Cube, pines, spark plugs, checkpoints and body shop use
+original Blender geometry exported to glTF. Terrain, trail signs, fences,
+gameplay indicators and remaining roadside detail are original geometry
+built in code.
 
 Inspired by classic elastic-suspension trials games, including Elasto Mania. No
 Elasto Mania levels, code, artwork or audio are included.

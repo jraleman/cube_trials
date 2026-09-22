@@ -46,7 +46,7 @@ const FRAMING := {
 	Options.EXHIBIT_SIGN: {"yaw": 0.2618, "pitch": 0.0873},
 	Options.EXHIBIT_PINE: {"yaw": 0.0, "pitch": 0.1745},
 	Options.EXHIBIT_FENCE: {"yaw": 0.5236, "pitch": 0.1745},
-	Options.EXHIBIT_GARAGE: {"yaw": 0.4363, "pitch": 0.2618},
+	Options.EXHIBIT_GARAGE: {"yaw": -0.4363, "pitch": 0.2618},
 }
 
 var _viewport: SubViewport
@@ -59,6 +59,8 @@ var _exhibit: Node3D
 var _built := {}
 var _focus := Vector3.ZERO
 var _base_distance := 6.0
+var _radius := 1.0
+var _half_height := 1.0
 var _base_yaw := 0.0
 var _base_pitch := 0.0
 var _yaw := 0.0
@@ -182,33 +184,11 @@ func _suspension() -> Node3D:
 
 
 func _plug() -> Node3D:
-	var root := Node3D.new()
-	root.name = "SparkPlug"
-	var model := MeshInstance3D.new()
-	model.name = "Plug"
-	model.mesh = Landscape.plug_mesh()
-	model.material_override = Landscape.plug_material()
-	root.add_child(model)
-	root.add_child(Landscape.plug_label(0))
-	return root
+	return Landscape.numbered_plug(0)
 
 
 func _checkpoint() -> Node3D:
-	var root := Node3D.new()
-	root.name = "CheckpointFlag"
-	var posts := Builder.new()
-	Landscape.checkpoint_mast_parts(posts, Vector3.ZERO)
-	root.add_child(_surface("Mast", posts, Landscape.signage_material()))
-	var flag := MeshInstance3D.new()
-	flag.name = "Flag"
-	flag.mesh = Landscape.checkpoint_flag_mesh()
-	flag.material_override = Landscape.checkpoint_flag_material()
-	flag.position = Landscape.CHECKPOINT_FLAG_OFFSET
-	root.add_child(flag)
-	root.add_child(Landscape.trail_label(
-		"CHECKPOINT 1", Landscape.CHECKPOINT_LABEL_OFFSET, 42, 0.006, Art.CREAM
-	))
-	return root
+	return Landscape.checkpoint_model(1)
 
 
 ## The trailhead board, wording and all, read straight out of the course.
@@ -227,14 +207,7 @@ func _sign() -> Node3D:
 
 
 func _pine() -> Node3D:
-	var root := Node3D.new()
-	root.name = "RoadsidePine"
-	var trunk := Builder.new()
-	var needles := Builder.new()
-	Landscape.tree_parts(trunk, needles, Vector3.ZERO, EXHIBIT_PINE_SCALE)
-	root.add_child(_surface("Trunk", trunk, Landscape.timber_material()))
-	root.add_child(_surface("Tiers", needles, Landscape.foliage_material()))
-	return root
+	return Landscape.pine_model(EXHIBIT_PINE_SCALE)
 
 
 func _fence() -> Node3D:
@@ -249,20 +222,7 @@ func _fence() -> Node3D:
 ## The garage in its finished state: every bulb lit and the sign already asking
 ## for the brake, because this exhibit only opens once a run has got here.
 func _garage() -> Node3D:
-	var root := Node3D.new()
-	root.name = "TrailService"
-	var parts := Builder.new()
-	var metal := Builder.new()
-	Landscape.garage_parts(parts, metal, Vector3.ZERO)
-	root.add_child(_surface("Shed", parts, Landscape.signage_material()))
-	root.add_child(_surface("Fittings", metal, Landscape.fitting_material()))
-	for label in Landscape.garage_labels("BRAKE TO PARK", Vector3.ZERO):
-		root.add_child(label)
-	for index in 5:
-		var lamp := Landscape.garage_lamp(index, Vector3.ZERO)
-		(lamp.material_override as StandardMaterial3D).albedo_color = Art.CREAM
-		root.add_child(lamp)
-	return root
+	return Landscape.garage_model(true)
 
 
 func _surface(title: String, parts: Builder, finish: Material) -> MeshInstance3D:
@@ -369,30 +329,35 @@ static func _collect_bounds(node: Node3D, at: Transform3D, boxes: Array[AABB]) -
 
 
 ## Fits the exhibit to whichever of the two field-of-view angles is tighter, so
-## a nine-unit garage frames itself on a phone held upright and a tall
+## the workshop and its yard frame themselves on a phone held upright and a tall
 ## checkpoint mast frames itself on an ultrawide — and a new exhibit needs no
 ## hand-measured camera distance at all.
 ##
 ## The model is treated as the cylinder it sweeps out as it turns, not as its
-## bounding box: a box would fit at one yaw and clip at the next. Horizontally
-## the camera sits where that cylinder is exactly tangent to the frustum;
-## vertically it also backs off by the cylinder's radius, because the near side
-## of a turning model is that much closer than its middle.
+## bounding box: a box would fit at one yaw and clip at the next. Camera pitch
+## also projects a wide yard into the vertical frustum, so fitting must account
+## for depth as well as height, including when the player tilts the exhibit.
 func _frame(bounds: AABB) -> void:
 	_focus = bounds.get_center()
-	var radius := maxf(
+	_radius = maxf(
 		Vector2(bounds.size.x, bounds.size.z).length() * 0.5, 0.005
 	)
-	var half_height := maxf(bounds.size.y * 0.5, 0.005)
-	var vertical := deg_to_rad(FIELD_OF_VIEW)
-	var horizontal := 2.0 * atan(tan(vertical * 0.5) * _aspect())
-	_base_distance = (
-		maxf(
-			radius / sin(horizontal * 0.5),
-			half_height / tan(vertical * 0.5) + radius
-		)
-		* FRAMING_MARGIN
-	)
+	_half_height = maxf(bounds.size.y * 0.5, 0.005)
+
+
+func _fitted_distance(pitch: float) -> float:
+	var vertical_tangent := tan(deg_to_rad(FIELD_OF_VIEW) * 0.5)
+	var horizontal_tangent := vertical_tangent * _aspect()
+	var sine := absf(sin(pitch))
+	var cosine := cos(pitch)
+	var horizontal := _radius * sqrt(
+		1.0 / (horizontal_tangent * horizontal_tangent) + cosine * cosine
+	) + _half_height * sine
+	var upper := _half_height * absf(cosine + sine * vertical_tangent) \
+		+ _radius * absf(-sine + cosine * vertical_tangent)
+	var lower := _half_height * absf(-cosine + sine * vertical_tangent) \
+		+ _radius * absf(sine + cosine * vertical_tangent)
+	return maxf(horizontal, maxf(upper, lower) / vertical_tangent) * FRAMING_MARGIN
 
 
 func _aspect() -> float:
@@ -406,6 +371,7 @@ func _apply_camera() -> void:
 	if _camera == null:
 		return
 	var pitch := clampf(_base_pitch + _pitch, -PITCH_LIMIT, PITCH_LIMIT)
+	_base_distance = _fitted_distance(pitch)
 	var offset := Vector3(0.0, sin(pitch), cos(pitch)).rotated(
 		Vector3.UP, _base_yaw + _yaw
 	)

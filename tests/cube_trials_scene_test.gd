@@ -6,6 +6,7 @@ extends SceneTree
 const Options = preload("res://games/cube_trials/cube_trials_options.gd")
 const State = preload("res://games/cube_trials/trial_state.gd")
 const Driver = preload("res://games/cube_trials/tests/driver_fixture.gd")
+const Daylight = preload("res://games/cube_trials/world/daylight.gd")
 const GAME := "res://games/cube_trials/gameplay.tscn"
 
 var _failures := PackedStringArray()
@@ -52,6 +53,7 @@ func _run() -> void:
 	await _test_rebinding(settings)
 	_test_multitouch_and_pause()
 	_test_brake_inputs()
+	_test_day_night_settings(settings)
 	_test_live_accessibility(settings)
 	_test_real_finish()
 	_game.call("_on_play_again_pressed")
@@ -151,6 +153,63 @@ func _test_multitouch_and_pause() -> void:
 	_touch(2, recover_button.get_global_rect().get_center(), false)
 	_expect(state.recoveries == old_recoveries + 1,
 		"Mouse emulation must not charge a touch recovery twice.")
+
+
+func _test_day_night_settings(settings: Node) -> void:
+	_game.call("_on_play_again_pressed")
+	_game.call("_set_reduced_motion_enabled", false)
+	settings.call("set_value", Options.DAY_NIGHT_KEY, true)
+	var view: Node = _game.get("_view")
+	var state: State = _game.get("_state")
+	var world: Node = view.get("world")
+	view.call("present", 2.0)
+	_expect(is_zero_approx(float(view.get("daylight_time"))),
+		"The day/night cycle must wait for the first driving input, like the trial clock.")
+	Input.action_press(Options.THROTTLE)
+	_game.call("_update_round", 0.1, 0.0)
+	Input.action_release(Options.THROTTLE)
+	_expect(float(view.get("daylight_time")) > 0.0,
+		"Real driving must start the optional day/night presentation clock.")
+	var before: float = view.get("daylight_time")
+	paused = true
+	_game.call("_update_round", 2.0, 0.0)
+	view.call("present", 2.0)
+	_expect(is_equal_approx(float(view.get("daylight_time")), before),
+		"Neither the round loop nor a direct paused redraw may advance the sun.")
+	settings.call("set_value", Options.DAY_NIGHT_KEY, false)
+	var lights: Daylight = world.get("daylight")
+	_expect(not bool(view.get("day_night_enabled"))
+		and is_zero_approx(float(view.get("daylight_time")))
+		and lights.sky_material.sky_top_color.is_equal_approx(Daylight.DAY_TOP),
+		"The live setting must restore fixed afternoon light even while paused.")
+	paused = false
+	settings.call("set_value", Options.DAY_NIGHT_KEY, true)
+	_game.call("_set_intense_effects_enabled", false)
+	var midnight := (0.75 - Daylight.START_PHASE) * Daylight.CYCLE_SECONDS
+	view.call("present", midnight)
+	_expect(is_equal_approx(float(view.get("daylight_time")), midnight)
+		and is_equal_approx(lights.night_amount, 1.0),
+		"Disabling intense effects must not disable the optional, gentle lighting cycle.")
+	_game.call("_recover")
+	_expect(is_equal_approx(float(view.get("daylight_time")), midnight),
+		"A recovery penalty must not skip the sun forward by five seconds.")
+	_game.call("_set_reduced_motion_enabled", true)
+	view.call("present", 5.0)
+	_expect(is_zero_approx(float(view.get("daylight_time")))
+		and is_zero_approx(lights.night_amount),
+		"Reduced motion must immediately park the sky in daylight and keep it there.")
+	_game.call("_set_reduced_motion_enabled", false)
+	view.call("present", Daylight.CYCLE_SECONDS * 2.0 + 3.0)
+	_expect(is_equal_approx(float(view.get("daylight_time")), 3.0),
+		"The presentation clock must wrap rather than grow indefinitely during a long run.")
+	state.finished = true
+	view.call("present", 5.0)
+	_expect(is_equal_approx(float(view.get("daylight_time")), 3.0),
+		"Results must freeze the lighting along with the trial clock.")
+	_game.call("_on_play_again_pressed")
+	_expect(is_zero_approx(float(view.get("daylight_time")))
+		and is_zero_approx(lights.night_amount),
+		"Replay must restart in afternoon light, not inherit the last run's night.")
 
 
 func _test_live_accessibility(settings: Node) -> void:

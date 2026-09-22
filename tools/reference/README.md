@@ -1,17 +1,30 @@
 # Modeling reference
 
-Development-only imagery used while authoring the original Cube meshes in
-`tools/blender/nissan_cube.blend`. The runtime car is the separate
-`assets/models/nissan_cube.glb` export. Nothing in this reference folder is
-loaded at runtime, shipped in a build, or imported by the engine.
+Development-only imagery used while authoring the original meshes in
+`tools\blender\`. The separate, portable GLB exports live in `assets\models\`;
+the car and all four props are used by the game and gallery. Shared runtime
+factories fit the props to the course and add its live indicators without
+reading these images. Nothing in this reference folder is loaded at runtime,
+shipped in a build, or imported by the engine.
 
-| File | What it is |
-| --- | --- |
-| `car.png` | Multi-view sheet of a 2009-generation Nissan Cube — front, rear, both flanks, roof and two three-quarter views — used to check proportions, glasshouse shape, wheel placement and body radii. |
+| File | Subject | Authored model |
+| --- | --- | --- |
+| `car.png` | Multi-view 2009-generation Nissan Cube: proportions, glasshouse, wheel placement and body radii. | `nissan_cube.blend` |
+| `tree.png` | Faceted conifer with layered green fronds and a flared trunk. | `pine_tree.blend` |
+| `spark-plug.png` | Ribbed ceramic spark plug with a hex shell, thread profile and hooked electrode; maker marks omitted. | `spark_plug.blend` |
+| `check-flag.png` | Yellow checker swallowtail, wooden pole, clamps, rock footing and grass. | `checkpoint_flag.blend` |
+| `car-body-shop.png` | Gabled workshop, open service bay, interior equipment, signs and yard props. The background forest and parked vehicle are not part of this assembly. | `car_body_shop.blend` |
+
+Every model has a matching GLB and a rendered `*_preview.png`. Geometry is
+authored parametrically against the visible proportions, not extracted from
+pixels: the generators never open, trace, sample or pack these sheets. The flag
+checker and workshop lettering are mesh geometry, not image textures. The
+root README documents generation, export, scale and the five inspection
+cameras in each Blender file.
 
 ## Why it lives here and not in `assets/`
 
-`assets/` is for files the game actually loads; this is a drafting aid. Three
+`assets/` is for runtime-ready resources; these are drafting aids. Three
 separate mechanisms keep it out of the product:
 
 - **`.gdignore`** (beside this file) stops Godot's filesystem scan from
@@ -21,11 +34,11 @@ separate mechanisms keep it out of the product:
 - **Export presets** already exclude `tools/*` and `games/*/tools/*` in every
   preset in `godot-base/export_presets.cfg`, including
   **Windows - Cube Trials (standalone)**.
-- **No runtime code path references it.** The car's GLB contains original
-  geometry and portable material colors, not textures sampled from this file.
+- **No runtime code path references these images.** The GLBs contain original
+  geometry and portable material colors, not textures sampled from the sheets.
 
-Verify the first point after any engine reimport — `car.png.import` must not
-exist, and `.godot/imported/` must hold no `car.png-*.ctex`.
+Verify the first point after any engine reimport: no reference PNG should gain
+an `.import` sidecar or a corresponding `.ctex` in the host's `.godot/imported/`.
 
 ## Provenance and rights
 
@@ -46,3 +59,9 @@ sponsored by Nissan. If this repository is ever published under terms that
 cannot accommodate a third-party image, delete `car.png` and substitute an
 orthographic reference you hold the rights to — the geometry code does not
 depend on the file existing.
+
+The four additional sheets are user-supplied modeling references; their
+presence does not establish a redistribution licence. Keep them
+development-only as well. The spark plug's printed maker name and logo are
+not reproduced. The workshop uses original, generic Creek signage, and none
+of the new Blender or GLB files embeds reference imagery.

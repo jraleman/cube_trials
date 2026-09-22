@@ -10,6 +10,8 @@ const Driver = preload("res://games/cube_trials/tests/driver_fixture.gd")
 const Art = preload("res://games/cube_trials/cube_art.gd")
 const Cube = preload("res://games/cube_trials/world/cube_model.gd")
 const View = preload("res://games/cube_trials/course_view.gd")
+const GalleryStage = preload("res://games/cube_trials/gallery_stage.gd")
+const Daylight = preload("res://games/cube_trials/world/daylight.gd")
 
 var _failures := PackedStringArray()
 var _game: Node
@@ -45,6 +47,7 @@ func _run() -> void:
 	settings.call("set_value", "ui/scale", 1.0)
 	settings.call("set_value", Options.AIR_CONTROL_KEY, 1.0)
 	settings.call("set_value", Options.ENGINE_AUDIO_KEY, false)
+	settings.call("set_value", Options.DAY_NIGHT_KEY, true)
 	GameCatalog.restrict_to(Options.GAME_ID)
 	get_root().theme = GameCatalog.theme().restyle(ThemeDB.get_project_theme())
 	_game = (load("res://games/cube_trials/gameplay.tscn") as PackedScene).instantiate()
@@ -83,6 +86,11 @@ func _run() -> void:
 	_game.call("_on_play_again_pressed")
 	await _render_frames()
 	var state: State = _game.get("_state")
+	_drive_to(Course.CHECKPOINT_X[1] + 60.0)
+	await _render_frames()
+	_test_brown_cube()
+	_test_draw_budget()
+	await _capture("imported-checkpoint")
 	_drive_to(2860.0)
 	await _render_frames()
 	_expect(state.position.x >= 2860.0 and state.contacts == 0,
@@ -95,9 +103,16 @@ func _run() -> void:
 	_test_brown_cube()
 	_test_draw_budget()
 	await _capture("quarry-jump")
+	_drive_to(Course.FINISH_X - 80.0)
+	await _render_frames()
+	_test_brown_cube()
+	_test_draw_budget()
+	await _capture("imported-garage-approach")
+	await _test_parking_and_night()
 	_drive_to(6000.0)
 	await _render_frames()
 	_expect(state.finished, "The rendered run must reach the real garage finish.")
+	_test_draw_budget()
 	await _capture("results")
 	_game.call("_on_see_score_pressed")
 	for frame in 45:
@@ -107,6 +122,9 @@ func _run() -> void:
 	await _capture("scorecard")
 	Driver.release_controls()
 	_game.free()
+	state = null
+	await _test_imported_gallery()
+	get_root().size = Vector2i(1280, 720)
 	var menu := (load("res://scenes/menus/main_menu.tscn") as PackedScene).instantiate()
 	get_root().add_child(menu)
 	await _render_frames()
@@ -199,7 +217,9 @@ func _test_3d_scene() -> void:
 		"Gameplay must render real 3D in an isolated viewport, not a painted substitute.")
 	_expect(world.get_node("ExactDrivingSurface") is MeshInstance3D
 		and world.get_node("LayeredQuarryRock") is MeshInstance3D
-		and world.get_node("CopperCreekServiceGarage") is MeshInstance3D,
+		and world.get_node(
+			"CopperCreekServiceGarage/ImportedBodyShop/CarBodyShop/Cladding"
+		) is MeshInstance3D,
 		"The course, quarry and garage must have actual 3D geometry.")
 	var car: Node3D = world.get("car")
 	var body := car.get_node("Chassis/BrownBodywork") as MeshInstance3D
@@ -210,6 +230,53 @@ func _test_3d_scene() -> void:
 		and car.get_node("RearAxle/RearRightWheel/Tires") is MeshInstance3D
 		and car.get_node("RearAxle/RearLeftWheel/Tires") is MeshInstance3D,
 		"The imported Nissan Cube must retain its volumetric body, glazing and four wheels.")
+	# The headless renderer cannot read MultiMesh transforms back; verify the real GPU storage here.
+	var poses: Array[Transform3D] = world.get("pine_poses")
+	var first := 0
+	for batch in world.get_node("RoadsidePines").get_children():
+		var foliage := batch.get_node("Foliage") as MultiMeshInstance3D
+		var trunk := batch.get_node("Trunk") as MultiMeshInstance3D
+		for index in foliage.multimesh.instance_count:
+			_expect(foliage.multimesh.get_instance_transform(index).is_equal_approx(
+				poses[first + index])
+				and trunk.multimesh.get_instance_transform(index).is_equal_approx(
+					poses[first + index]),
+				"The rendered trunks and foliage must use the actual grounded planting transforms.")
+		first += foliage.multimesh.instance_count
+	_expect(first == poses.size(), "The real renderer must contain every planted pine.")
+
+
+func _test_imported_gallery() -> void:
+	var stage := GalleryStage.new()
+	get_root().add_child(stage)
+	for dimensions in [Vector2i(1280, 720), Vector2i(390, 844), Vector2i(2560, 720)]:
+		get_root().size = dimensions
+		await _render_frames()
+		stage.size = get_root().get_visible_rect().size
+		for id: String in [Options.EXHIBIT_PLUG, Options.EXHIBIT_CHECKPOINT,
+				Options.EXHIBIT_PINE, Options.EXHIBIT_GARAGE]:
+			stage.configure({"id": id})
+			for pose: Vector2 in [Vector2.ZERO, Vector2(PI * 0.5, 0.0),
+					Vector2(PI, 0.7), Vector2(0, -0.9)]:
+				stage.set_view(pose.x, pose.y, 1.0)
+				await _render_frames()
+				var model: Node3D = stage.get("_exhibit")
+				var camera: Camera3D = stage.get("_camera")
+				var viewport: SubViewport = stage.get("_viewport")
+				var picture := Rect2(Vector2.ZERO, Vector2(viewport.size))
+				var contained := true
+				for part: MeshInstance3D in model.find_children(
+					"*", "MeshInstance3D", true, false
+				):
+					for corner in 8:
+						var point := part.to_global(part.mesh.get_aabb().get_endpoint(corner))
+						contained = contained and not camera.is_position_behind(point) \
+							and picture.has_point(camera.unproject_position(point))
+				_expect(contained, "%s must fit its gallery case at %s, pose %s."
+					% [id, dimensions, pose])
+				if pose.is_zero_approx():
+					await _capture("gallery-%s-%dx%d" % [id, dimensions.x, dimensions.y])
+	stage.free()
 
 
 func _test_draw_budget() -> void:
@@ -223,6 +290,8 @@ func _test_draw_budget() -> void:
 	)
 	_peak_draws = maxi(_peak_draws, draws)
 	_peak_triangles = maxi(_peak_triangles, triangles)
+	print("Render budget at x=%.1f, size=%s: %d draws / %d triangles"
+		% [(_game.get("_state") as State).position.x, get_root().size, draws, triangles])
 	_expect(draws > 10 and draws <= 200 and triangles > 1000 and triangles < 120000,
 		"The actual 3D view must stay within its Compatibility budget (%d draws / %d triangles)."
 		% [draws, triangles])
@@ -350,6 +419,122 @@ func _test_motion_blur() -> void:
 	view.present(1.0 / 60.0)
 	_expect(image_node.material == null, "Results must never retain speed blur.")
 	_game.call("_set_reduced_motion_enabled", true)
+
+
+func _test_parking_and_night() -> void:
+	var view := _game.get("_view") as View
+	var reduced := view.reduced_motion
+	var effects := view.intense_effects
+	var cycling := view.day_night_enabled
+	var garage := view.world.get_node("CopperCreekServiceGarage") as Node3D
+	var outline := garage.get_node("ParkingOutline") as MeshInstance3D
+	view.set_reduced_motion(true)
+	view.set_intense_effects(true)
+	_expect(await _outline_pixels(view, outline) > 20,
+		"The parking outline must visibly mark the road, not just exist as a material.")
+	_test_parking_hint(view)
+	var day := view.world_viewport.get_texture().get_image()
+	await _capture("parking-daylight")
+	view.set_reduced_motion(false)
+	view.set_day_night_enabled(true)
+	view.daylight_time = (0.5 - Daylight.START_PHASE) * Daylight.CYCLE_SECONDS
+	view.present(0.0)
+	await _render_frames()
+	await _capture("parking-sunset")
+	view.daylight_time = (0.75 - Daylight.START_PHASE) * Daylight.CYCLE_SECONDS
+	view.set_intense_effects(false)
+	await _render_frames()
+	var night := view.world_viewport.get_texture().get_image()
+	_expect(_average_luminance(night) < _average_luminance(day) * 0.9
+		and _average_luminance(night) > 0.08,
+		"The real night image must be distinct from daylight without blacking out the course.")
+	_expect(await _outline_pixels(view, outline) > 20,
+		"Night parking must remain visibly outlined with intense effects disabled.")
+	var paint := view.world_camera.unproject_position(view.world.car.paint_sample())
+	var paint_color := night.get_pixel(
+		clampi(roundi(paint.x), 0, night.get_width() - 1),
+		clampi(roundi(paint.y), 0, night.get_height() - 1))
+	_expect(paint_color.get_luminance() > 0.055,
+		"The driver's actual bodywork must remain readable at night.")
+	for light in view.world.car.headlights:
+		light.visible = false
+	await _render_frames()
+	var without_headlights := view.world_viewport.get_texture().get_image()
+	_expect(_brighter_pixels(night, without_headlights) > 20,
+		"Automatic headlights must illuminate actual road pixels, not only light their bulbs.")
+	view.present(0.0)
+	var workshop := garage.get_node("WorkshopLight") as OmniLight3D
+	workshop.visible = false
+	await _render_frames()
+	var without_workshop := view.world_viewport.get_texture().get_image()
+	_expect(_brighter_pixels(night, without_workshop) > 20,
+		"The warm workshop light must visibly illuminate the garage at night.")
+	view.present(0.0)
+	await _render_frames()
+	_test_draw_budget()
+	await _capture("parking-night-low-effects")
+	view.set_intense_effects(true)
+	await _render_frames()
+	await _capture("parking-night")
+	view.set_intense_effects(false)
+	get_root().size = Vector2i(390, 844)
+	await _render_frames()
+	_test_bounds()
+	_test_draw_budget()
+	_expect(await _outline_pixels(view, outline) > 20,
+		"The night parking target must remain visibly identifiable on a portrait phone.")
+	_test_parking_hint(view)
+	await _capture("parking-night-portrait")
+	get_root().size = Vector2i(1280, 720)
+	view.set_day_night_enabled(cycling)
+	view.set_reduced_motion(reduced)
+	view.set_intense_effects(effects)
+	await _render_frames()
+
+
+func _test_parking_hint(view: View) -> void:
+	var physical_scale := float(get_root().size.x) / get_root().get_visible_rect().size.x
+	var bounds: Rect2 = view.get("_parking_hint_bounds")
+	var font_size: int = view.get("_parking_hint_font_size")
+	var target := view.project_point(view.world.parking_target())
+	_expect(bounds.has_area() and Rect2(Vector2.ZERO, view.size).encloses(bounds)
+		and font_size * physical_scale >= 13.0
+		and bounds.size.y * physical_scale >= 24.0 and bounds.end.y < target.y,
+		"The parking callout must stay legible, on-screen and above its pointer to the real bay.")
+
+
+func _outline_pixels(view: View, outline: MeshInstance3D) -> int:
+	outline.visible = false
+	await _render_frames()
+	var off := view.world_viewport.get_texture().get_image()
+	outline.visible = true
+	await _render_frames()
+	var on := view.world_viewport.get_texture().get_image()
+	var changed := 0
+	for y in range(0, on.get_height(), 2):
+		for x in range(0, on.get_width(), 2):
+			if _color_difference(on.get_pixel(x, y), off.get_pixel(x, y)) > 0.1:
+				changed += 1
+	return changed
+
+
+func _brighter_pixels(on: Image, off: Image) -> int:
+	var changed := 0
+	for y in range(0, on.get_height(), 2):
+		for x in range(0, on.get_width(), 2):
+			if on.get_pixel(x, y).get_luminance() > off.get_pixel(x, y).get_luminance() + 0.025:
+				changed += 1
+	return changed
+
+
+func _average_luminance(image: Image) -> float:
+	var total := 0.0
+	var samples := 0
+	for y in range(0, image.get_height(), 8):
+		for x in range(0, image.get_width(), 8):
+			total += image.get_pixel(x, y).get_luminance()
+			samples += 1
+	return total / samples
 
 
 func _color_difference(a: Color, b: Color) -> float:

@@ -2,6 +2,7 @@ extends RefCounted
 
 ## Copper Creek's paint, scale and daylight are shared by play and its 3D portraits.
 
+const Daylight = preload("res://games/cube_trials/world/daylight.gd")
 const INK := Color("253336")
 const CREAM := Color("ffedc7")
 const COPPER := Color("dda368")
@@ -27,39 +28,5 @@ static func material(roughness := 0.85, metallic := 0.0) -> StandardMaterial3D:
 
 
 ## Ordinary sky lighting and shadow maps work on desktop, web and mobile Compatibility.
-static func light_stage(parent: Node3D) -> void:
-	var environment := WorldEnvironment.new()
-	environment.name = "CopperDaylight"
-	var settings := Environment.new()
-	settings.background_mode = Environment.BG_SKY
-	settings.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	settings.ambient_light_color = Color("b8c9c9")
-	settings.ambient_light_energy = 0.44
-	var sky := Sky.new()
-	var sky_material := ProceduralSkyMaterial.new()
-	sky_material.sky_top_color = Color("648ea5")
-	sky_material.sky_horizon_color = Color("eed7b4")
-	sky_material.ground_bottom_color = Color("665841")
-	sky_material.ground_horizon_color = Color("eed7b4")
-	sky_material.sun_angle_max = 7.0
-	sky.sky_material = sky_material
-	settings.sky = sky
-	environment.environment = settings
-	parent.add_child(environment)
-	var sun := DirectionalLight3D.new()
-	sun.name = "LateAfternoonSun"
-	sun.rotation_degrees = Vector3(-42, -38, 0)
-	sun.light_color = Color("ffe4c2")
-	sun.light_energy = 0.85
-	sun.shadow_enabled = true
-	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_ORTHOGONAL
-	sun.directional_shadow_max_distance = 70.0
-	sun.shadow_bias = 0.25
-	sun.shadow_normal_bias = 1.2
-	parent.add_child(sun)
-	var fill := DirectionalLight3D.new()
-	fill.name = "SkyFill"
-	fill.rotation_degrees = Vector3(-25, 145, 0)
-	fill.light_color = Color("b4d4e4")
-	fill.light_energy = 0.14
-	parent.add_child(fill)
+static func light_stage(parent: Node3D) -> Daylight:
+	return Daylight.new(parent)

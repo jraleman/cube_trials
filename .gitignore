@@ -37,3 +37,4 @@ Thumbs.db
 .idea/
 *~
 *.blend[0-9]
+/tools/blender/__pycache__/

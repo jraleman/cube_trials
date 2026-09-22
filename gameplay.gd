@@ -16,6 +16,7 @@ var _controls: DriveControls
 var _engine: AudioStreamPlayer
 var _cues: Dictionary[String, AudioStreamWAV] = {}
 var _engine_enabled := true
+var _day_night_enabled := true
 var _air_control := 1.0
 var _feedback_text := ""
 var _feedback_left := 0.0
@@ -45,6 +46,7 @@ func _load_round_settings() -> void:
 	super()
 	_air_control = Settings.tunable(Options.AIR_CONTROL_KEY)
 	_engine_enabled = Settings.tunable_bool(Options.ENGINE_AUDIO_KEY)
+	_day_night_enabled = Settings.tunable_bool(Options.DAY_NIGHT_KEY)
 	_paint_id = Store.equipped_id(Options.GAME_ID, Options.PAINT_SLOT)
 	_rim_id = Store.equipped_id(Options.GAME_ID, Options.RIM_SLOT)
 
@@ -65,6 +67,7 @@ func _build_playfield() -> void:
 	_playfield.add_child(_view)
 	_view.set_reduced_motion(_reduced_motion_enabled)
 	_view.set_intense_effects(_intense_effects_enabled)
+	_view.set_day_night_enabled(_day_night_enabled)
 	_controls = DriveControls.new()
 	_controls.name = "DriveControls"
 	_hud.get_node("Overlay").add_child(_controls)
@@ -96,6 +99,7 @@ func _reset_round_state() -> void:
 	_feedback_text = ""
 	_controls.set_enabled(true)
 	_apply_finish()
+	_view.set_day_night_enabled(_day_night_enabled)
 	_view.configure(_state)
 	_engine.stop()
 	_sync_hud()
@@ -365,6 +369,10 @@ func _on_game_setting_changed(key: String, _value: Variant) -> void:
 		_engine_enabled = Settings.tunable_bool(Options.ENGINE_AUDIO_KEY)
 		if not _engine_enabled and _engine != null:
 			_engine.stop()
+	elif key == Options.DAY_NIGHT_KEY:
+		_day_night_enabled = Settings.tunable_bool(Options.DAY_NIGHT_KEY)
+		if _view != null:
+			_view.set_day_night_enabled(_day_night_enabled)
 	elif key == "ui/scale":
 		_resize_layout()
 

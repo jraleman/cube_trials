@@ -19,6 +19,8 @@ var intense_effects := true
 var braking := false
 var camera := Vector2.ZERO
 var ambient_time := 0.0
+var daylight_time := 0.0
+var day_night_enabled := true
 var world: Landscape
 var world_viewport: SubViewport
 var world_camera: Camera3D
@@ -31,6 +33,9 @@ var _blur_pixels := Vector2.ZERO
 var _blur_strength := 0.0
 var _last_recoveries := 0
 var _was_recovering := false
+var _parking_style: StyleBoxFlat
+var _parking_hint_bounds := Rect2()
+var _parking_hint_font_size := 20
 
 
 func _init() -> void:
@@ -50,6 +55,7 @@ func _ready() -> void:
 	world = Landscape.new()
 	world.name = "CopperCreekWorld"
 	world_viewport.add_child(world)
+	world.parking_label.visible = false
 	world_camera = Camera3D.new()
 	world_camera.name = "SideFollowCamera"
 	world_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
@@ -73,6 +79,8 @@ func _ready() -> void:
 	add_child(_overlay)
 	_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_overlay.draw.connect(_draw_overlay)
+	_parking_style = StyleBoxFlat.new()
+	_parking_style.bg_color = Color("172a29", 0.96)
 	resized.connect(_resize_world)
 	_resize_world()
 
@@ -89,6 +97,7 @@ func configure(run: State) -> void:
 	state = run
 	_camera_ready = false
 	ambient_time = 0.0
+	daylight_time = 0.0
 	braking = false
 	_last_recoveries = state.recoveries
 	_was_recovering = state.crash_wait > 0.0
@@ -118,14 +127,16 @@ func present(delta: float) -> void:
 	else:
 		camera = camera.lerp(target, 1.0 - exp(-delta * 7.0))
 	_camera_ready = true
-	if not reduced_motion and not state.finished:
+	if not reduced_motion and not state.finished and not get_tree().paused:
 		ambient_time += delta
+		if day_night_enabled and state.started:
+			daylight_time = fposmod(daylight_time + delta, Art.Daylight.CYCLE_SECONDS)
 	var focus := Art.world_point(camera)
 	world_camera.position = focus + CAMERA_OFFSET
 	world_camera.look_at(focus)
 	world_camera.size = maxf(1.0, visible_height * Art.WORLD_SCALE)
 	world.present(state, ambient_time, reduced_motion, intense_effects, braking,
-		0.0 if recovered else delta)
+		0.0 if recovered else delta, daylight_time)
 	_update_motion_blur(delta, snap or recovering)
 	_overlay.queue_redraw()
 
@@ -135,6 +146,15 @@ func set_reduced_motion(value: bool) -> void:
 	reduced_motion = value
 	if value:
 		ambient_time = 0.0
+		daylight_time = 0.0
+	present(0.0)
+
+
+## Disabling the cycle restores readable daylight immediately, including in menus.
+func set_day_night_enabled(value: bool) -> void:
+	day_night_enabled = value
+	if not value:
+		daylight_time = 0.0
 	present(0.0)
 
 
@@ -233,3 +253,37 @@ func _draw_overlay() -> void:
 		var point := project_point(Art.world_point(state.position + Vector2(0, -100)))
 		_overlay.draw_string(ThemeDB.fallback_font, point + Vector2(-80, 0),
 			"RECOVERING  +5s", HORIZONTAL_ALIGNMENT_LEFT, -1, 22, Art.CREAM)
+	_draw_parking_hint()
+
+
+func _draw_parking_hint() -> void:
+	_parking_hint_bounds = Rect2()
+	if state.position.x < Course.FINISH_X - 700.0 or state.crash_wait > 0.0:
+		return
+	var target := project_point(world.parking_target())
+	if not Rect2(Vector2.ZERO, size).has_point(target):
+		return
+	var physical_scale := float(get_window().size.x) \
+		/ maxf(get_viewport().get_visible_rect().size.x, 1.0)
+	var font := ThemeDB.fallback_font
+	_parking_hint_font_size = maxi(20, ceili(13.0 / physical_scale))
+	var text := world.parking_label.text
+	var padding := Vector2(12, 7) / physical_scale
+	var box_size := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1,
+		_parking_hint_font_size) + padding * 2.0
+	var at := target - Vector2(box_size.x * 0.5, box_size.y + 18.0 / physical_scale)
+	var inset := 12.0 / physical_scale
+	at.x = clampf(at.x, inset, maxf(inset, size.x - inset - box_size.x))
+	at.y = clampf(at.y, inset, maxf(inset, size.y - 36.0 - box_size.y))
+	_parking_hint_bounds = Rect2(at, box_size)
+	var color := world.parking_label.modulate
+	_parking_style.border_color = color
+	_parking_style.set_border_width_all(maxi(1, roundi(1.0 / physical_scale)))
+	_parking_style.set_corner_radius_all(roundi(6.0 / physical_scale))
+	_overlay.draw_line(Vector2(at.x + box_size.x * 0.5, at.y + box_size.y),
+		target, color, 2.0 / physical_scale, true)
+	_overlay.draw_circle(target, 3.0 / physical_scale, color)
+	_overlay.draw_style_box(_parking_style, _parking_hint_bounds)
+	_overlay.draw_string(font,
+		at + padding + Vector2(0, font.get_ascent(_parking_hint_font_size)),
+		text, HORIZONTAL_ALIGNMENT_LEFT, -1, _parking_hint_font_size, Art.CREAM)
