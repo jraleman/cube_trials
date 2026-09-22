@@ -7,6 +7,10 @@ const Options = preload("res://games/cube_trials/cube_trials_options.gd")
 const State = preload("res://games/cube_trials/trial_state.gd")
 const Driver = preload("res://games/cube_trials/tests/driver_fixture.gd")
 const Daylight = preload("res://games/cube_trials/world/daylight.gd")
+const Course = preload("res://games/cube_trials/course.gd")
+const View = preload("res://games/cube_trials/course_view.gd")
+const Portrait = preload("res://games/cube_trials/share_art.gd")
+const TrialHUD = preload("res://games/cube_trials/trial_hud.gd")
 const GAME := "res://games/cube_trials/gameplay.tscn"
 
 var _failures := PackedStringArray()
@@ -18,6 +22,7 @@ func _initialize() -> void:
 
 
 func _run() -> void:
+	get_root().size = Vector2i(1280, 720)
 	var settings := get_root().get_node("Settings")
 	var original_values := (settings.get("_values") as Dictionary).duplicate(true)
 	var save_timer := settings.get("_save_timer") as Timer
@@ -43,6 +48,7 @@ func _run() -> void:
 			== "DeskCanSaw Games/Cube Trials",
 		"A tagged standalone build must have its own stable save directory.")
 	_game = (load(GAME) as PackedScene).instantiate()
+	_game.set_script(load("res://games/cube_trials/tests/input_gameplay_fixture.gd"))
 	get_root().add_child(_game)
 	_game.set_process(false)
 	await process_frame
@@ -50,17 +56,24 @@ func _run() -> void:
 	_expect(not bool(_game.get("_uses_shell_round_rules")) and not bool(_game.get("_lives_mode"))
 		and (_game.get_node("%RoundTimer") as Timer).is_stopped(),
 		"The shared countdown and lives pool must not run during the trial.")
+	_test_compact_hud()
 	await _test_rebinding(settings)
+	await _test_camera_controls(settings)
 	_test_multitouch_and_pause()
+	await _test_jump_inputs(settings)
+	await _test_gamepad_jump_and_brake()
 	_test_brake_inputs()
 	_test_day_night_settings(settings)
 	_test_live_accessibility(settings)
+	_test_damage_lifecycle()
+	_test_life_loss()
 	_test_real_finish()
 	_game.call("_on_play_again_pressed")
 	var replay: State = _game.get("_state")
 	_expect(not replay.finished and replay.plug_count() == 0 and replay.checkpoint == 0
-		and replay.elapsed == 0.0 and replay.recoveries == 0,
-		"Replay must reset time, pickups, checkpoint and penalties together.")
+		and replay.elapsed == 0.0 and replay.recoveries == 0 and replay.damage_stage == 0
+		and replay.lives_left == State.STARTING_LIVES and not replay.failed,
+		"Replay must reset time, pickups, checkpoint, penalties, damage and lives together.")
 	var controls: Node = _game.get("_controls")
 	_expect(not (controls.get("buttons")[Options.THROTTLE] as Button).disabled,
 		"Replay must re-enable controls disabled by the finish.")
@@ -82,13 +95,40 @@ func _run() -> void:
 	quit(0 if _failures.is_empty() else 1)
 
 
+func _test_compact_hud() -> void:
+	var hud := _game.get("_trial_hud") as TrialHUD
+	_expect(hud.lives_label.text == "5" and hud.points_label.text == "0"
+		and hud.plugs_label.text == "0/5",
+		"The in-view HUD must show actual lives, points and plug progress separately.")
+	_expect(not (_game.get_node("%Callout") as Control).is_visible_in_tree()
+		and not (_game.get_node("%Hint") as Control).is_visible_in_tree()
+		and (_game.get_node("%PauseButton") as Button).icon != null,
+		"Gameplay must replace the persistent header and instruction blocks with an icon HUD.")
+	_game.call("_update_round", 2.6, 0.0)
+	_expect(not hud.feedback_label.is_visible_in_tree(),
+		"Brief feedback must disappear instead of reverting to a permanent wall of instructions.")
+	var state: State = _game.get("_state")
+	state.collected[0] = true
+	_game.call("_update_round", 0.0, 0.0)
+	_expect(hud.points_label.text == "1000" and hud.plugs_label.text == "1/5"
+		and hud.lives_label.accessibility_name.contains("5 lives"),
+		"Icon counters need real score values and meaningful screen-reader descriptions.")
+	_game.call("_on_play_again_pressed")
+
+
 func _test_rebinding(settings: Node) -> void:
 	var key := "controls/cube_trials_throttle"
 	var original_key: int = settings.call("binding_keycode", key)
 	settings.call("set_binding_key", key, KEY_T, Options.GAME_ID)
 	var controls: Node = _game.get("_controls")
 	var throttle: Button = controls.get("buttons")[Options.THROTTLE]
-	_expect(throttle.text.ends_with("\nT"), "The pedal hint must reflect live rebinding.")
+	controls.call("fit_width", 1400.0, 1.0)
+	_expect(throttle.text == "T" and throttle.tooltip_text.contains("(T)") and throttle.icon != null,
+		"The wide-screen pedal and its accessible hint must reflect live rebinding.")
+	controls.call("fit_width", 540.0, 1.0)
+	_expect(throttle.text.is_empty() and throttle.accessibility_name.contains("(T)"),
+		"Phone pedals must keep rebound keys accessible without adding visible instruction text.")
+	_game.call("_resize_layout")
 	var event := InputEventKey.new()
 	event.keycode = KEY_T
 	event.physical_keycode = KEY_T
@@ -108,6 +148,85 @@ func _test_rebinding(settings: Node) -> void:
 	await process_frame
 	_expect(not Input.is_action_pressed(Options.THROTTLE),
 		"Releasing the physical key must release the registered throttle action.")
+
+
+func _test_camera_controls(settings: Node) -> void:
+	_game.call("_on_play_again_pressed")
+	await process_frame
+	var view := _game.get("_view") as View
+	var hud := _game.get("_trial_hud") as TrialHUD
+	var state: State = _game.get("_state")
+	var controls: Node = _game.get("_controls")
+	_expect(view.camera_mode == View.CameraMode.SIDE and hud.camera_button.icon != null,
+		"New games must start in Side view with a camera icon rather than a permanent mode label.")
+	var original: int = settings.call("binding_keycode", "controls/cube_trials_camera")
+	settings.call("set_binding_key", "controls/cube_trials_camera", KEY_V, Options.GAME_ID)
+	_expect(hud.camera_button.accessibility_name.contains("V / R3"),
+		"Rebinding the camera key must immediately update its accessible HUD hint.")
+	var key := InputEventKey.new()
+	key.keycode = KEY_V
+	key.physical_keycode = KEY_V
+	key.pressed = true
+	Input.parse_input_event(key)
+	await process_frame
+	_expect(view.camera_mode == View.CameraMode.CHASE and not state.started and state.elapsed == 0.0,
+		"The rebound key must switch the real camera without starting the driving clock.")
+	key.echo = true
+	Input.parse_input_event(key)
+	await process_frame
+	_expect(view.camera_mode == View.CameraMode.CHASE, "Holding the camera key must not cycle every repeat.")
+	key.echo = false
+	key.pressed = false
+	Input.parse_input_event(key)
+	settings.call("set_binding_key", "controls/cube_trials_camera", original, Options.GAME_ID)
+	var throttle: Button = controls.get("buttons")[Options.THROTTLE]
+	_touch(5, throttle.get_global_rect().get_center(), true)
+	var point := hud.camera_button.get_global_rect().get_center()
+	_touch(6, point, true)
+	var emulated := InputEventMouseButton.new()
+	emulated.device = InputEvent.DEVICE_ID_EMULATION
+	emulated.button_index = MOUSE_BUTTON_LEFT
+	emulated.position = point
+	emulated.pressed = true
+	get_root().push_input(emulated, true)
+	emulated.pressed = false
+	get_root().push_input(emulated, true)
+	_touch(6, point, false)
+	_expect(view.camera_mode == View.CameraMode.COCKPIT
+		and float(controls.call("strength", Options.THROTTLE)) == 1.0,
+		"A second finger must change view once without double-firing or releasing the held pedal.")
+	_touch(5, throttle.get_global_rect().get_center(), false)
+	var mouse := InputEventMouseButton.new()
+	mouse.button_index = MOUSE_BUTTON_LEFT
+	mouse.position = point
+	mouse.pressed = true
+	get_root().push_input(mouse, true)
+	var draw_mode := hud.camera_button.get_draw_mode()
+	mouse.pressed = false
+	get_root().push_input(mouse, true)
+	_expect(view.camera_mode == View.CameraMode.SIDE,
+		"A real mouse click must cycle Cockpit back to Side (mode %s, draw %s, button %s, viewport %s)."
+		% [view.camera_name(), draw_mode, hud.camera_button.get_global_rect(), get_root().get_visible_rect()])
+	view.set_camera_mode(View.CameraMode.CHASE)
+	paused = true
+	_game.call("_cycle_camera")
+	_expect(view.camera_mode == View.CameraMode.CHASE, "Pause must gate camera selection along with driving.")
+	paused = false
+	_game.call("_recover")
+	_game.call("_on_play_again_pressed")
+	_expect(view.camera_mode == View.CameraMode.CHASE and not hud.camera_button.disabled
+		and hud.camera_button.accessibility_name.contains("Chase"),
+		"Recovery and replay must preserve the selected view and re-enable its button.")
+	var foreign_pad := InputEventJoypadButton.new()
+	foreign_pad.device = 999
+	foreign_pad.button_index = JOY_BUTTON_RIGHT_STICK
+	foreign_pad.pressed = true
+	_game.call("_handle_gameplay_input", foreign_pad)
+	_expect(view.camera_mode == View.CameraMode.CHASE,
+		"A controller not assigned to the driver cannot switch the camera.")
+	view.set_camera_mode(View.CameraMode.SIDE)
+	_game.call("_on_play_again_pressed")
+	await process_frame
 
 
 func _test_multitouch_and_pause() -> void:
@@ -153,6 +272,149 @@ func _test_multitouch_and_pause() -> void:
 	_touch(2, recover_button.get_global_rect().get_center(), false)
 	_expect(state.recoveries == old_recoveries + 1,
 		"Mouse emulation must not charge a touch recovery twice.")
+
+
+func _test_jump_inputs(settings: Node) -> void:
+	_game.call("_on_play_again_pressed")
+	_game.call("_set_reduced_motion_enabled", false)
+	await process_frame
+	var controls: Node = _game.get("_controls")
+	var button: Button = controls.get("buttons")[Options.JUMP]
+	var state: State = _game.get("_state")
+	var view := _game.get("_view") as View
+	for binding in Options.CONTROL_BINDINGS:
+		if binding["action"] == Options.JUMP:
+			_expect(binding["default"] == KEY_SPACE, "Space must be the new default jump key.")
+		elif binding["action"] == Options.BRAKE:
+			_expect(binding["default"] == KEY_SHIFT, "Brake must move to Shift, not share Space.")
+	var original: int = settings.call("binding_keycode", "controls/cube_trials_jump")
+	settings.call("set_binding_key", "controls/cube_trials_jump", KEY_J, Options.GAME_ID)
+	_expect(button.icon != null and button.accessibility_name.contains("JUMP (J)"),
+		"The new touch control must have an icon and an accessible, live rebound key hint.")
+	_key(KEY_J, true)
+	await process_frame
+	_game.call("_update_round", State.STEP, 0.0)
+	_expect(state.started and state.contacts == 0 and state.velocity.y < -490.0
+		and float(view.world.car.get("_jump_time")) < 0.1 and not view.braking,
+		"A rebound physical jump key must launch and animate the car without applying the brake.")
+	_key(KEY_J, false)
+	await process_frame
+	_game.call("_update_round", 0.2, 0.0)
+	var falling := state.velocity.y
+	_key(KEY_J, true)
+	await process_frame
+	_game.call("_update_round", State.STEP, 0.0)
+	_expect(state.velocity.y > falling, "Pressing the keyboard jump again in midair cannot double-jump.")
+	_key(KEY_J, false)
+	settings.call("set_binding_key", "controls/cube_trials_jump", original, Options.GAME_ID)
+	await process_frame
+	_game.call("_on_play_again_pressed")
+	state = _game.get("_state")
+	var throttle: Button = controls.get("buttons")[Options.THROTTLE]
+	var tilt: Button = controls.get("buttons")[Options.NOSE_UP]
+	_touch(10, throttle.get_global_rect().get_center(), true)
+	_touch(11, tilt.get_global_rect().get_center(), true)
+	var point := button.get_global_rect().get_center()
+	_touch(12, point, true)
+	var emulated := InputEventMouseButton.new()
+	emulated.device = InputEvent.DEVICE_ID_EMULATION
+	emulated.button_index = MOUSE_BUTTON_LEFT
+	emulated.position = point
+	emulated.pressed = true
+	get_root().push_input(emulated, true)
+	emulated.pressed = false
+	get_root().push_input(emulated, true)
+	_touch(12, point, false)
+	_game.call("_update_round", State.STEP, 0.0)
+	_expect(state.velocity.y < -490.0
+		and float(controls.call("strength", Options.THROTTLE)) == 1.0
+		and float(controls.call("strength", Options.NOSE_UP)) == 1.0,
+		"A short third-finger jump must survive release without stealing throttle or tilt.")
+	_touch(10, throttle.get_global_rect().get_center(), false)
+	_touch(11, tilt.get_global_rect().get_center(), false)
+	for frame in 150:
+		_game.call("_update_round", 1.0 / 60.0, 0.0)
+	_expect(state.contacts == 2 and state.longest_air < 1.3 and state.recoveries == 0,
+		"Touch/mouse emulation must trigger only one clean hop.")
+	_game.call("_on_play_again_pressed")
+	state = _game.get("_state")
+	var mouse := InputEventMouseButton.new()
+	mouse.button_index = MOUSE_BUTTON_LEFT
+	mouse.position = point
+	mouse.pressed = true
+	get_root().push_input(mouse, true)
+	mouse.pressed = false
+	get_root().push_input(mouse, true)
+	_game.call("_update_round", State.STEP, 0.0)
+	_expect(state.velocity.y < -490.0,
+		"A complete mouse click between updates must still queue one jump.")
+	_game.call("_on_play_again_pressed")
+	state = _game.get("_state")
+	_touch(12, point, true)
+	paused = true
+	_game.call("_update_round", 1.0, 0.0)
+	paused = false
+	_game.call("_update_round", 0.2, 0.0)
+	_expect(not state.started and state.contacts == 2
+		and float(controls.call("strength", Options.JUMP)) == 0.0,
+		"Pause must discard a queued touch jump, including its unreleased contact.")
+	_touch(12, point, false)
+	_game.call("_queue_jump")
+	_game.call("_recover")
+	_game.call("_update_round", 0.2, 0.0)
+	_expect(state.contacts == 2 and absf(state.velocity.y) < 0.1,
+		"Manual recovery must discard an unconsumed jump before the checkpoint is presented.")
+	_game.call("_on_play_again_pressed")
+
+
+func _test_gamepad_jump_and_brake() -> void:
+	var device := 15
+	while device >= 0 and Input.get_connected_joypads().has(device):
+		device -= 1
+	_expect(device >= 0, "The gamepad input test needs an unused virtual controller slot.")
+	if device < 0:
+		return
+	_game.set("test_controller", device)
+	_game.call("_on_play_again_pressed")
+	var state: State = _game.get("_state")
+	var view := _game.get("_view") as View
+	_pad(device, JOY_BUTTON_B, true)
+	await process_frame
+	_game.call("_update_round", 0.2, 0.0)
+	_expect(view.braking and view.world.car.brake_level > 0.98 and not state.started,
+		"The assigned gamepad's B button must brake, not jump or leave gameplay.")
+	_pad(device, JOY_BUTTON_B, false)
+	await process_frame
+	_game.call("_update_round", 0.3, 0.0)
+	_pad(device, JOY_BUTTON_A, true)
+	await process_frame
+	_game.call("_update_round", State.STEP, 0.0)
+	_expect(state.velocity.y < -490.0 and not view.braking,
+		"The assigned gamepad's A button must jump instead of retaining the old brake action.")
+	for frame in 180:
+		_game.call("_update_round", 1.0 / 60.0, 0.0)
+	_expect(state.contacts == 2 and state.recoveries == 0,
+		"Holding gamepad A must not auto-hop after landing.")
+	_game.call("_on_play_again_pressed")
+	state = _game.get("_state")
+	_game.call("_update_round", 0.3, 0.0)
+	_expect(state.contacts == 2 and not state.started,
+		"Replay must not turn a still-held gamepad button into a fresh jump.")
+	_game.call("_recover")
+	_game.call("_update_round", 0.3, 0.0)
+	_expect(state.contacts == 2,
+		"A held gamepad button must stay suppressed across recovery until released.")
+	_pad(device, JOY_BUTTON_A, false)
+	await process_frame
+	var foreign := InputEventJoypadButton.new()
+	foreign.device = 999
+	foreign.button_index = JOY_BUTTON_A
+	foreign.pressed = true
+	_game.call("_handle_gameplay_input", foreign)
+	_game.call("_update_round", 0.1, 0.0)
+	_expect(state.contacts == 2, "An unassigned gamepad must not queue a jump.")
+	_game.set("test_controller", -1)
+	_game.call("_on_play_again_pressed")
 
 
 func _test_day_night_settings(settings: Node) -> void:
@@ -275,7 +537,7 @@ func _test_real_finish() -> void:
 	for frame in 60 * 90:
 		Driver.hold_controls(state)
 		_game.call("_update_round", 1.0 / 60.0, 0.0)
-		if state.finished:
+		if state.is_over():
 			break
 	Driver.release_controls()
 	_expect(state.finished and not bool(_game.get("_round_active")),
@@ -291,6 +553,7 @@ func _test_real_finish() -> void:
 	var payload: Dictionary = _game.call("_share_payload")
 	_expect(payload["game_id"] == Options.GAME_ID and payload["hits_value"] == 5
 		and payload["misses_value"] == state.recoveries
+		and payload["damage_stage"] == state.damage_stage
 		and str(payload["score"]) == str(state.score()),
 		"Sharing must carry this trial's results and identity.")
 	var achievements := get_root().get_node("AchievementManager")
@@ -300,6 +563,122 @@ func _test_real_finish() -> void:
 	var before := state.adjusted_time()
 	_game.call("_update_round", 3.0, 0.0)
 	_expect(state.adjusted_time() == before, "Results cannot keep spending race time.")
+
+
+func _test_damage_lifecycle() -> void:
+	_game.call("_on_play_again_pressed")
+	var state: State = _game.get("_state")
+	var view := _game.get("_view") as View
+	var car := view.world.car
+	state.position = Vector2(2860, Course.FALL_Y + 5.0)
+	_game.call("_update_round", State.STEP, 0.0)
+	_expect(state.damage_stage == 1 and car.damage_stage == 1,
+		"A real crash event must update the visible gameplay chassis immediately.")
+	paused = true
+	_game.call("_update_round", 2.0, 0.0)
+	view.present(0.0)
+	_expect(state.damage_stage == 1 and car.damage_stage == 1 and state.crash_wait > 0.0,
+		"Paused redraws must retain damage without advancing crash or landing state.")
+	paused = false
+	_game.call("_update_round", 1.0, 0.0)
+	_game.call("_recover")
+	_expect(state.damage_stage == 1 and car.damage_stage == 1 and state.crash_wait == 0.0,
+		"Both automatic and manual checkpoint recovery must retain visible damage.")
+	view.set_finish("cube_paint_signal", "cube_rim_graphite")
+	_expect(car.damage_stage == 1 and car.paint_id == "cube_paint_signal",
+		"Respraying the live car must not silently repair its chassis.")
+	_game.call("_apply_finish")
+	_expect(car.damage_stage == 1, "Returning from the garage must retain the run's damage.")
+	var payload: Dictionary = _game.call("_share_payload")
+	var portrait := Portrait.new()
+	portrait.configure(payload)
+	get_root().add_child(portrait)
+	_expect(payload["damage_stage"] == 1 and portrait.model.damage_stage == 1,
+		"The share portrait must show the run's damage even when configured before ready.")
+	portrait.configure({"damage_stage": 3, "paint_id": "cube_paint_signal"})
+	_expect(portrait.model.damage_stage == 3 and portrait.model.paint_id == "cube_paint_signal",
+		"A reused share portrait must update damage and paint together.")
+	portrait.configure({})
+	_expect(portrait.model.damage_stage == 0,
+		"An unconfigured/default portrait must not inherit another run's damage.")
+	portrait.free()
+	_game.call("_on_play_again_pressed")
+	var replay: State = _game.get("_state")
+	_expect(replay.damage_stage == 0 and car.damage_stage == 0 and view.world.car == car,
+		"Replay must restore pristine bodywork on the existing car, not rebuild the scenery.")
+
+
+func _test_life_loss() -> void:
+	_game.call("_on_play_again_pressed")
+	_game.call("_set_reduced_motion_enabled", false)
+	_game.call("_set_intense_effects_enabled", true)
+	var state: State = _game.get("_state")
+	var hud := _game.get("_trial_hud") as TrialHUD
+	var view := _game.get("_view") as View
+	var controls: Node = _game.get("_controls")
+	state.collected[0] = true
+	for crash in State.STARTING_LIVES:
+		state.position = Vector2(2860, Course.FALL_Y + 5.0)
+		_game.call("_update_round", State.STEP, 0.0)
+		_expect(hud.lives_label.text == str(State.STARTING_LIVES - crash - 1)
+			and bool(_game.get("_round_active"))
+			and float(view.world.car.get("_impact_time")) < 0.1,
+			"A live crash must update the heart counter and animate before recovery or results.")
+		if state.lives_left == 0:
+			_expect((controls.get("buttons")[Options.THROTTLE] as Button).disabled,
+				"The final impact must disable touch input immediately.")
+			paused = true
+			var clock := state.adjusted_time()
+			_game.call("_update_round", 2.0, 0.0)
+			_expect(not state.failed and state.adjusted_time() == clock,
+				"Pausing during the final impact must freeze its countdown and the clock.")
+			paused = false
+		_game.call("_update_round", 1.0, 0.0)
+	_expect(state.failed and not state.finished and not bool(_game.get("_round_active"))
+		and (_game.get_node("%ResultLabel") as Label).text == "OUT OF LIVES"
+		and (_game.get_node("%RoundOver") as Control).visible,
+		"The fifth crash must reach the shared loss results without falsely delivering the plugs.")
+	var mode := view.camera_mode
+	_game.call("_cycle_camera")
+	_expect(hud.camera_button.disabled and view.camera_mode == mode,
+		"Results must disable both the camera button and late camera input.")
+	_expect((_game.get_node("%PlayerOneStatsScore") as Label).text == "1000"
+		and (_game.get("_round_achievements") as Array).is_empty()
+		and _game.get_node("%WorldFX").get_child_count() == 0,
+		"A loss keeps collected points but awards no completion achievement or victory confetti.")
+	var payload: Dictionary = _game.call("_share_payload")
+	_expect(payload["failed"] and payload["lives_left"] == 0
+		and payload["damage_stage"] == State.MAX_DAMAGE_STAGE and payload["misses_value"] == 4,
+		"Loss sharing must retain the true lives, cosmetic damage and actual recovery count.")
+	var clock := state.adjusted_time()
+	_game.call("_recover")
+	_game.call("_queue_jump")
+	_game.call("_update_round", 2.0, 0.0)
+	_expect(state.adjusted_time() == clock and state.lives_left == 0
+		and not bool(_game.get("_jump_pending")),
+		"Gameplay callbacks cannot keep spending time or revive a completed loss.")
+	_game.call("_on_play_again_pressed")
+	state = _game.get("_state")
+	_expect(state.lives_left == 5 and not state.failed and state.damage_stage == 0
+		and hud.lives_label.text == "5" and hud.points_label.text == "0"
+		and not (controls.get("buttons")[Options.THROTTLE] as Button).disabled,
+		"Replay after a loss must reset the heart, score, car and enabled controls together.")
+
+
+func _key(keycode: Key, pressed: bool) -> void:
+	var event := InputEventKey.new()
+	event.keycode = keycode
+	event.physical_keycode = keycode
+	event.pressed = pressed
+	Input.parse_input_event(event)
+
+
+func _pad(device: int, button: JoyButton, pressed: bool) -> void:
+	var event := InputEventJoypadButton.new()
+	event.device = device
+	event.button_index = button
+	event.pressed = pressed
+	Input.parse_input_event(event)
 
 
 func _touch(index: int, point: Vector2, pressed: bool) -> void:

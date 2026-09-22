@@ -4,6 +4,7 @@ extends SceneTree
 
 const Art = preload("res://games/cube_trials/cube_art.gd")
 const Cube = preload("res://games/cube_trials/world/cube_model.gd")
+const Coilover = preload("res://games/cube_trials/world/coilover.gd")
 const Landscape = preload("res://games/cube_trials/world/copper_creek.gd")
 const Course = preload("res://games/cube_trials/course.gd")
 const State = preload("res://games/cube_trials/trial_state.gd")
@@ -14,6 +15,8 @@ const Finish = preload("res://games/cube_trials/world/cube_finish.gd")
 const Options = preload("res://games/cube_trials/cube_trials_options.gd")
 const Game = preload("res://games/cube_trials/game.gd")
 const Daylight = preload("res://games/cube_trials/world/daylight.gd")
+const View = preload("res://games/cube_trials/course_view.gd")
+const Driver = preload("res://games/cube_trials/tests/driver_fixture.gd")
 
 var _failures := PackedStringArray()
 
@@ -25,8 +28,15 @@ func _initialize() -> void:
 func _run() -> void:
 	_test_imported_asset()
 	_test_vehicle()
+	_test_damage_variants()
 	_test_stock_stance()
+	_test_coilovers()
+	_test_wheel_droop()
+	_test_drive_animation()
+	_test_jump_animation()
+	_test_impact_animation()
 	_test_brake_animation()
+	_test_camera_modes()
 	_test_daylight()
 	_test_automatic_headlights()
 	_test_terrain_and_accessibility()
@@ -142,7 +152,7 @@ func _test_vehicle() -> void:
 	var envelope := car.local_bounds()
 	for part in car.find_children("*", "MeshInstance3D", true, false):
 		var local: AABB = (car.global_transform.affine_inverse() * part.global_transform) \
-			* part.mesh.get_aabb()
+			* Cube.mesh_bounds(part)
 		_expect(envelope.grow(0.001).encloses(local),
 			"The framing envelope must contain pitched bodywork, suspension and all wheels.")
 	var lamp := car.get_node("Chassis/RearBrakeLights") as MeshInstance3D
@@ -161,6 +171,119 @@ func _test_vehicle() -> void:
 		"Braking must change the real rear-light material.")
 	other.free()
 	car.free()
+
+
+func _test_damage_variants() -> void:
+	var library := Cube.DAMAGE_MODEL.instantiate()
+	var assembly := library.get_node("NissanCubeDamage")
+	_expect(assembly.get_child_count() == State.MAX_DAMAGE_STAGE,
+		"The damage library must contain exactly four chassis variants, not duplicate cars.")
+	for node in library.find_children("*", "", true, false):
+		_expect(not (node is Camera3D or node is Light3D or node is CollisionObject3D)
+			and not str(node.name).contains("Wheel"),
+			"Damage assets must not contain studio nodes, wheels, or competing physics.")
+	library.free()
+	var car := Cube.new()
+	var other := Cube.new()
+	get_root().add_child(car)
+	get_root().add_child(other)
+	var node_count := car.find_children("*", "", true, false).size()
+	var pristine := (car.chassis.get_node("BrownBodywork") as MeshInstance3D).mesh
+	var pristine_bounds := pristine.get_aabb()
+	var wheel_meshes: Array[Mesh] = []
+	for wheel in car.wheels:
+		wheel_meshes.append((wheel.get_node("Tires") as MeshInstance3D).mesh)
+	var state := State.new()
+	state.advance(0.5, 0.0, 0.0, 0.0)
+	var previous_width := INF
+	for stage in State.DAMAGE_NAMES.size():
+		state.damage_stage = stage
+		car.apply_state(state, true, 0.0, false, true, 1.0)
+		var body := car.chassis.get_node("BrownBodywork") as MeshInstance3D
+		var glass := car.chassis.get_node("WraparoundGlazing") as MeshInstance3D
+		_expect(car.damage_stage == stage and body.mesh.get_aabb().size.x < previous_width,
+			"Each stage must select a progressively crumpled chassis, not just recolor it.")
+		previous_width = body.mesh.get_aabb().size.x
+		_expect(_has_material(body.mesh, "Cube Scraped steel") == (stage > 0)
+			and _has_material(glass.mesh, "Cube Glass fractures") == (stage >= 3),
+			"Scuffs and cracked glazing must appear at the authored damage stages.")
+		_expect(_has_material(body.mesh, Finish.BODY_COAT)
+			and _has_material(body.mesh, Finish.BODY_EDGE),
+			"Every damage variant must retain both named paint surfaces.")
+		var triangles := 0
+		var surfaces := 0
+		for instance: MeshInstance3D in car.find_children("*", "MeshInstance3D", true, false):
+			if instance is Coilover:
+				continue
+			surfaces += instance.mesh.get_surface_count()
+			for surface in instance.mesh.get_surface_count():
+				var arrays := instance.mesh.surface_get_arrays(surface)
+				var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+				var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+				triangles += (indices.size() if not indices.is_empty() else vertices.size()) / 3
+			_check_mesh_normals(instance.mesh)
+		_expect(triangles <= 48000 and surfaces <= 48
+			and car.find_children("*", "", true, false).size() == node_count,
+			"Only the active chassis may draw; every complete stage must fit 48k triangles / 48 surfaces.")
+		for paint: String in Finish.PAINTS.keys() + [""]:
+			car.set_finish(paint, "cube_rim_graphite")
+			for surface in body.mesh.get_surface_count():
+				var exported := body.mesh.surface_get_material(surface)
+				var active := body.get_active_material(surface) as StandardMaterial3D
+				if exported.resource_name == Finish.BODY_COAT:
+					_expect(active.albedo_color.to_html(false) == Finish.swatch(paint).to_html(false)
+						and car.damage_stage == stage,
+						"Every bought or factory paint must work without repairing damage.")
+				elif exported.resource_name.begins_with("Cube Exposed") \
+					or exported.resource_name == "Cube Scraped steel":
+					_expect(body.get_surface_override_material(surface) == null,
+						"Repainting must not paint over exposed primer or bare-metal scrapes.")
+		for rim: String in Finish.RIMS.keys():
+			car.set_finish("", rim)
+			for wheel in car.wheels:
+				var alloys := wheel.get_node("AlloyRims") as MeshInstance3D
+				_expect(_surface_colors(alloys).has(Finish.swatch(rim)),
+					"All four wheels must retain every rim finish at every damage stage.")
+		for index in car.wheels.size():
+			_expect((car.wheels[index].get_node("Tires") as MeshInstance3D).mesh == wheel_meshes[index],
+				"Damage must share the existing tires rather than swapping or deforming them.")
+		var rear := car.chassis.get_node("RearBrakeLights") as MeshInstance3D
+		var brake := rear.material_override as StandardMaterial3D
+		var front := car.chassis.get_node("HeadlightsAndIndicators") as MeshInstance3D
+		var bulb := front.get_active_material(int(car.get("_headlight_surface"))) as StandardMaterial3D
+		_expect(is_equal_approx(brake.emission_energy_multiplier, Cube.BRAKE_EMISSION)
+			and is_equal_approx(bulb.emission_energy_multiplier, 2.0)
+			and car.headlights[0].visible,
+			"Stage changes and repainting must preserve live brake and headlight emission.")
+		var points: Dictionary = (car.get("_damage_points") as Array)[stage]
+		_expect(car.headlights[0].position.is_equal_approx(
+			Vector3(points["LeftHeadlightSocket"]) * Cube.MODEL_SCALE + Cube.BODY_OFFSET)
+			and car.brake_lights[1].position.is_equal_approx(
+			Vector3(points["RightBrakeSocket"]) * Cube.MODEL_SCALE + Cube.BODY_OFFSET),
+			"Light emitters must follow the same authored deformation as the visible lenses.")
+		car.apply_state(state, true, 0.0, true, false)
+		_expect(car.damage_stage == stage and is_equal_approx(car.brake_level, 1.0)
+			and not car.brake_lights[0].visible,
+			"Accessibility settings must retain static damage and essential brake feedback.")
+	_expect((car.chassis.get_node("BrownBodywork") as MeshInstance3D).mesh.get_aabb().end.y
+		< pristine_bounds.end.y - 0.10,
+		"The battered roof must visibly lose height, not leave pristine glass floating above it.")
+	_expect((other.chassis.get_node("BrownBodywork") as MeshInstance3D).mesh == pristine
+		and other.damage_stage == 0 and _overrides(other).is_empty(),
+		"Damage and repainting must not mutate another car or its shared imported resources.")
+	car.apply_state(State.new())
+	_expect((car.chassis.get_node("BrownBodywork") as MeshInstance3D).mesh == pristine
+		and car.damage_stage == 0,
+		"A fresh run must restore the exact pristine geometry on the existing assembly.")
+	car.free()
+	other.free()
+
+
+func _has_material(mesh: Mesh, name: String) -> bool:
+	for surface in mesh.get_surface_count():
+		if mesh.surface_get_material(surface).resource_name == name:
+			return true
+	return false
 
 
 func _test_stock_stance() -> void:
@@ -194,10 +317,421 @@ func _test_stock_stance() -> void:
 				+ maxf(absf(bounds.position.z), absf(bounds.end.z)) * wheel.scale.z
 			_expect(outer < Cube.HALF_WIDTH + 0.04,
 				"Tires must sit under the fenders rather than outside the body like a truck.")
+			var inner := absf(wheel.position.z) \
+				- maxf(absf(bounds.position.z), absf(bounds.end.z)) * wheel.scale.z
+			var spring := car.springs[index * 2 + side]
+			var strut_bounds := spring.transform * spring.custom_aabb
+			_expect(maxf(absf(strut_bounds.position.z), absf(strut_bounds.end.z)) < inner,
+				"Coilovers must sit inboard of the tires, not outside the wheel wells.")
 	for spring in car.springs:
-		_expect(spring.scale.y < 0.25,
-			"Parked suspension struts must remain short and tucked into the wheel wells.")
+		_expect(spring.scale.is_equal_approx(Vector3.ONE) and spring.length > 0.50 and spring.length < 0.65,
+			"The internal coilovers must include their fixed housings without raising the stock car.")
+	_check_coilover_visibility(car, false, "A parked car must not expose its coilovers.")
 	car.free()
+
+
+func _check_coilover_visibility(car: Cube, visible: bool, message: String) -> void:
+	for spring in car.springs:
+		_expect(spring.visible == visible, message)
+
+
+func _check_wheel_droop(car: Cube, state: State, reduced := false) -> float:
+	var down := Vector2.DOWN.rotated(state.angle)
+	var direction := Vector3(down.x, -down.y, 0.0)
+	var peak := 0.0
+	for index in 2:
+		var offset := car.axles[index].global_position - Art.world_point(state.wheel_centers[index])
+		var extension := offset.dot(direction)
+		_expect(extension >= -0.0001 and extension <= Cube.AIRBORNE_WHEEL_DROP + 0.0001
+			and extension <= 0.18 and offset.is_equal_approx(direction * extension),
+			"Visual wheel droop must be slight and follow chassis pitch, never widen the track.")
+		if reduced or not state.is_airborne():
+			_expect(offset.is_zero_approx(),
+				"Ground contact, reduced motion, recovery and results must retain exact physics hubs.")
+		elif extension > 0.001:
+			var hit := Course.wheel_contact(state.wheel_centers[index], down,
+				Cube.AIRBORNE_WHEEL_DROP / Art.WORLD_SCALE, State.WHEEL_RADIUS)
+			_expect(hit.is_empty() or extension <= maxf(0.0, float(hit["length"])) \
+				* Art.WORLD_SCALE + 0.0001,
+				"Extra visual travel must not push an airborne tire through the sloped road.")
+		_expect(is_equal_approx(car.axles[index].rotation.z, -state.wheel_angles[index]),
+			"Drooping wheels must retain their real rolling angle.")
+		peak = maxf(peak, extension)
+	return peak
+
+
+func _test_wheel_droop() -> void:
+	for fps: int in [30, 60, 144]:
+		var car := Cube.new()
+		get_root().add_child(car)
+		var state := State.new()
+		state.advance(0.5, 0.0, 0.0, 0.0)
+		car.apply_state(state)
+		var peak := 0.0
+		var before_landing := 0.0
+		var landed := false
+		for frame in fps * 2:
+			state.advance(1.0 / fps, 0.0, 0.0, 0.0, frame == 0)
+			if frame == 0:
+				car.play_jump()
+			var wheels := state.wheel_centers.duplicate()
+			var position := state.position
+			var velocity := state.velocity
+			car.apply_state(state, false, 1.0 / fps)
+			var extension := _check_wheel_droop(car, state)
+			_expect(state.wheel_centers == wheels and state.position == position
+				and state.velocity == velocity,
+				"Airborne wheel droop must be presentation-only at every render frame rate.")
+			peak = maxf(peak, extension)
+			if frame == 0:
+				_expect(extension < 0.04, "The wheels must ease outward, not pop to full droop at takeoff.")
+			if state.is_airborne():
+				before_landing = extension
+			elif not landed and peak > 0.0:
+				landed = true
+				_expect(before_landing < 0.035,
+					"Wheel droop must retract before touchdown instead of snapping the full travel.")
+		_expect(peak >= 0.14 and peak <= 0.18 and landed,
+			"A real jump must show a restrained 14-18 cm wheel drop and a clean landing at %d FPS." % fps)
+		state.advance(0.25, 0.0, 0.0, 0.0, true)
+		car.apply_state(state, false, 0.25, false, false)
+		_expect(_check_wheel_droop(car, state) >= 0.14,
+			"Disabling intense effects must not disable the airborne suspension pose.")
+		car.apply_state(state, false, 0.0, true)
+		_check_wheel_droop(car, state, true)
+		_check_coilover_visibility(car, true,
+			"Reduced motion removes extra wheel droop, not the actual airborne coilovers.")
+		state.recover()
+		car.reset_motion()
+		car.apply_state(state)
+		_check_wheel_droop(car, state)
+		car.apply_state(State.new())
+		_check_wheel_droop(car, State.new())
+		car.free()
+
+
+func _coilover_vertices(strut: Coilover) -> PackedVector3Array:
+	var arrays := strut.mesh.surface_get_arrays(0)
+	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var shapes := (strut.mesh as ArrayMesh).surface_get_blend_shape_arrays(0)
+	var compressed: PackedVector3Array = shapes[0][Mesh.ARRAY_VERTEX]
+	var extended: PackedVector3Array = shapes[1][Mesh.ARRAY_VERTEX]
+	var compression := strut.get_blend_shape_value(0)
+	var extension := strut.get_blend_shape_value(1)
+	for index in vertices.size():
+		vertices[index] = vertices[index] * (1.0 - compression - extension) \
+			+ compressed[index] * compression + extended[index] * extension
+	return vertices
+
+
+func _colored_bounds(vertices: PackedVector3Array, colors: PackedColorArray, color: Color) -> AABB:
+	var bounds := AABB()
+	var found := false
+	for index in colors.size():
+		if not colors[index].is_equal_approx(color):
+			continue
+		bounds = bounds.expand(vertices[index]) if found else AABB(vertices[index], Vector3.ZERO)
+		found = true
+	_expect(found, "The coilover must retain its separately colored mechanical components.")
+	return bounds
+
+
+func _test_coilovers() -> void:
+	var strut := Coilover.new()
+	var other := Coilover.new()
+	var mesh := strut.mesh as ArrayMesh
+	var colors: PackedColorArray = mesh.surface_get_arrays(0)[Mesh.ARRAY_COLOR]
+	_expect(mesh == other.mesh and mesh.get_blend_shape_count() == 2
+		and mesh.get_surface_count() == 1 and mesh.get_faces().size() / 3 < 2000,
+		"Four coilovers must share one low-poly, single-surface mesh with independent travel morphs "
+		+ "(%d triangles)." % (mesh.get_faces().size() / 3))
+	_check_mesh_normals(mesh)
+	var previous_shaft := 0.0
+	for length: float in [0.38, Coilover.REFERENCE_LENGTH, 0.80]:
+		strut.set_length(length)
+		var vertices := _coilover_vertices(strut)
+		for vertex in vertices:
+			_expect(vertex.is_finite() and strut.custom_aabb.grow(0.001).has_point(vertex),
+				"Deformed coilovers must stay finite and inside their current render/framing bounds.")
+		var casing := _colored_bounds(vertices, colors, Coilover.CASE_COLOR)
+		var shaft := _colored_bounds(vertices, colors, Coilover.SHAFT_COLOR)
+		var coil := _colored_bounds(vertices, colors, Coilover.COIL_COLOR)
+		_expect(absf(casing.size.y - Coilover.CASE_LENGTH) < 0.001
+			and shaft.size.y > previous_shaft and absf(shaft.size.x - 0.038) < 0.001
+			and absf(shaft.size.y - (length - 0.195)) < 0.001,
+			"The housing must stay rigid while the chrome shaft telescopes, never scales sideways.")
+		_expect(absf(coil.size.x - 2.0 * (Coilover.SPRING_RADIUS + Coilover.WIRE_RADIUS)) < 0.002,
+			"Spring compression must change pitch without narrowing its round wire or coil diameter.")
+		previous_shaft = shaft.size.y
+	_expect(is_zero_approx(other.get_blend_shape_value(0))
+		and is_zero_approx(other.get_blend_shape_value(1)),
+		"Changing one strut's travel must not animate another instance of its shared mesh.")
+	strut.free()
+	other.free()
+	var car := Cube.new()
+	get_root().add_child(car)
+	_check_coilover_visibility(car, false,
+		"An unconfigured car, portrait or gallery car must start with its coilovers concealed.")
+	var state := State.new()
+	state.advance(0.5, 0.0, 0.0, 0.0)
+	car.apply_state(state)
+	var resting := car.springs[1].length
+	var shortest := resting
+	var longest := resting
+	var resource := car.springs[1].mesh
+	for frame in 180:
+		state.advance(1.0 / 60.0, 0.0, 0.0, 0.0, frame == 0)
+		if frame == 0:
+			car.play_jump()
+		var wheels := state.wheel_centers.duplicate()
+		car.apply_state(state, false, 1.0 / 60.0)
+		_check_wheel_droop(car, state)
+		_check_coilover_visibility(car, state.contacts == 0,
+			"Coilovers must appear only in flight and disappear as soon as a wheel lands.")
+		shortest = minf(shortest, car.springs[1].length)
+		longest = maxf(longest, car.springs[1].length)
+		for index in 2:
+			for side in 2:
+				var spring := car.springs[index * 2 + side]
+				var depth := Cube.COILOVER_DEPTH * (-1.0 if side == 0 else 1.0)
+				var upper := car.chassis.to_global(
+					Vector3(State.AXLES[index].x, -State.AXLES[index].y, 0) * Art.WORLD_SCALE
+					+ Vector3(-Cube.COILOVER_RAKE, Cube.COILOVER_MOUNT_RISE, depth))
+				var lower := car.axles[index].global_position + Vector3(0, 0, depth)
+				_expect(spring.to_global(Vector3.UP * spring.length * 0.5).distance_to(upper) < 0.001
+					and spring.to_global(Vector3.DOWN * spring.length * 0.5).distance_to(lower) < 0.001
+					and spring.mesh == resource and state.wheel_centers == wheels,
+					"Each coilover must stay bolted to the chassis and displayed hub without moving physics.")
+		if frame == 25:
+			var held_pose := car.springs[1].transform
+			var held_length := car.springs[1].length
+			var held_wheel := car.axles[0].transform
+			paused = true
+			car.apply_state(state, false, 0.5)
+			_expect(car.springs[1].transform.is_equal_approx(held_pose)
+				and is_equal_approx(car.springs[1].length, held_length)
+				and car.axles[0].transform.is_equal_approx(held_wheel),
+				"Paused redraws must freeze wheel droop, spring preload and the telescoping damper together.")
+			_check_coilover_visibility(car, true,
+				"Pausing in mid-flight must retain the visible suspension without advancing it.")
+			paused = false
+	_expect(shortest < resting - 0.05 and longest > resting + 0.10
+		and absf(car.springs[1].length - resting) < 0.003,
+		"A jump must visibly extend the coilovers, compress them on landing, and settle at stock height.")
+	state.advance(State.STEP, 0.0, 0.0, 0.0, true)
+	state.advance(0.25, 0.0, 0.0, 0.0)
+	car.apply_state(state, false, 0.0, true, false)
+	_expect(car.springs[1].length > resting + 0.06 and car.chassis.position == Vector3.ZERO,
+		"Reduced motion must retain real airborne suspension travel without decorative body movement.")
+	_check_coilover_visibility(car, true,
+		"Reduced motion and disabled intense effects must retain airborne coilovers.")
+	state.recover()
+	car.reset_motion()
+	car.apply_state(state)
+	_expect(absf(car.springs[1].length - resting) < 0.003,
+		"Recovery must restore the actual resting coilover length instead of leaving a stretched pose.")
+	_check_coilover_visibility(car, false, "Recovery must conceal the grounded coilovers immediately.")
+	car.apply_state(State.new())
+	_expect(absf(car.springs[1].length - resting) < 0.003,
+		"A new run must clear all old per-wheel spring compression.")
+	_check_coilover_visibility(car, false, "Replay must not retain visible airborne coilovers.")
+	state = State.new()
+	state.advance(0.25, 0.0, 0.0, 0.0, true)
+	for stage in State.DAMAGE_NAMES.size():
+		state.damage_stage = stage
+		car.apply_state(state, false, 0.25)
+		_check_coilover_visibility(car, true, "Every damage stage must retain airborne coilovers.")
+		_expect(_check_wheel_droop(car, state) >= 0.14,
+			"Every damage stage must retain the same restrained airborne wheel extension.")
+		state.contacts = 1
+		car.apply_state(state)
+		_check_wheel_droop(car, state)
+		_check_coilover_visibility(car, false,
+			"Even a one-wheel landing must conceal the coilovers at every damage stage.")
+		state.contacts = 0
+	state.crash_wait = State.CRASH_DELAY
+	car.apply_state(state)
+	_check_wheel_droop(car, state)
+	_check_coilover_visibility(car, false, "A crash must not leave the coilovers exposed.")
+	state.crash_wait = 0.0
+	state.failed = true
+	car.apply_state(state)
+	_check_wheel_droop(car, state)
+	_check_coilover_visibility(car, false, "Failed results must conceal the coilovers.")
+	state.failed = false
+	state.finished = true
+	car.apply_state(state)
+	_check_wheel_droop(car, state)
+	_check_coilover_visibility(car, false, "Finished results must conceal the coilovers.")
+	var exhibit := Cube.suspension_display()
+	_expect(exhibit.visible and exhibit.mesh == resource and absf(exhibit.length - resting) < 0.003,
+		"The standalone gallery strut must remain visible with the same geometry and parked preload.")
+	exhibit.free()
+	car.free()
+
+
+func _test_drive_animation() -> void:
+	var car := Cube.new()
+	get_root().add_child(car)
+	var state := State.new()
+	state.advance(0.5, 0, 0, 0)
+	car.apply_state(state, false, State.STEP)
+	var lift := 0.0
+	var bob := 0.0
+	for frame in 24:
+		state.advance(1.0 / 60.0, 1.0, 0.0, 0.0)
+		var position := state.position
+		car.apply_state(state, false, 1.0 / 60.0)
+		lift = maxf(lift, car.chassis.rotation.z + state.angle)
+		bob = maxf(bob, absf(car.chassis.position.y))
+		_expect(state.position == position
+			and car.axles[0].global_position.is_equal_approx(Art.world_point(state.wheel_centers[0])),
+			"Decorative chassis motion must never move physics or wheel contacts.")
+		_check_coilover_visibility(car, false,
+			"Ordinary grounded acceleration must not expose the coilovers.")
+	_expect(lift > 0.01 and lift <= Cube.MAX_DRIVE_PITCH and bob > 0.005,
+		"Driving must visibly lift and gently rock the body in addition to turning the wheels.")
+	var dive := 0.0
+	for frame in 20:
+		state.advance(1.0 / 60.0, 0.0, 1.0, 0.0)
+		car.apply_state(state, true, 1.0 / 60.0)
+		dive = minf(dive, car.chassis.rotation.z + state.angle)
+		_check_coilover_visibility(car, false, "Grounded braking must keep the coilovers concealed.")
+	_expect(dive < -0.005, "Actual braking must produce a short, bounded nose dive.")
+	car.apply_state(state, true, 0.0, true)
+	_expect(car.chassis.position == Vector3.ZERO
+		and is_equal_approx(car.chassis.rotation.z, -state.angle)
+		and is_equal_approx(car.axles[0].rotation.z, -state.wheel_angles[0]),
+		"Reduced motion must remove body rocking without hiding essential pitch and wheel travel.")
+	car.free()
+
+
+func _test_jump_animation() -> void:
+	var car := Cube.new()
+	get_root().add_child(car)
+	var state := State.new()
+	state.advance(0.5, 0.0, 0.0, 0.0)
+	car.apply_state(state, false, State.STEP)
+	state.advance(State.STEP, 0.0, 0.0, 0.0, true)
+	car.play_jump()
+	car.apply_state(state, false, State.STEP)
+	_expect(car.chassis.position.y < -0.04 and state.velocity.y < -490.0,
+		"Takeoff must show a short spring compression while physics launches immediately.")
+	var pose := car.chassis.transform
+	paused = true
+	car.apply_state(state, false, 0.5)
+	_expect(car.chassis.transform.is_equal_approx(pose),
+		"Pausing must freeze takeoff rather than spending its animation behind a menu.")
+	paused = false
+	var ascent := 0.0
+	var descent := 0.0
+	var compression := 0.0
+	var rebound := 0.0
+	for frame in 180:
+		state.advance(1.0 / 60.0, 0.0, 0.0, 0.0)
+		var position := state.position
+		var velocity := state.velocity
+		var wheels := state.wheel_centers.duplicate()
+		car.apply_state(state, false, 1.0 / 60.0)
+		var pitch := car.chassis.rotation.z + state.angle
+		if state.contacts == 0:
+			ascent = maxf(ascent, pitch)
+			descent = minf(descent, pitch)
+		else:
+			compression = minf(compression, car.chassis.position.y)
+			rebound = maxf(rebound, car.chassis.position.y)
+		_expect(state.position == position and state.velocity == velocity and state.wheel_centers == wheels,
+			"Jump and landing animation must leave the underlying physics and wheel contacts untouched.")
+		_check_wheel_droop(car, state)
+	_expect(ascent > 0.015 and descent < -0.015
+		and compression < -0.025 and rebound > 0.005,
+		"A jump must lean through its arc, compress on landing, then rebound and settle.")
+	_expect(car.chassis.position.is_zero_approx() and absf(car.chassis.rotation.z) < 0.001
+		and state.damage_stage == 0,
+		"A normal landing must settle without leaving a permanent pose or cosmetic damage.")
+	car.play_jump()
+	car.apply_state(state, false, 0.04, true)
+	_expect(car.chassis.position == Vector3.ZERO
+		and is_equal_approx(car.chassis.rotation.z, -state.angle),
+		"Reduced motion must suppress decorative jumping and landing without hiding chassis pitch.")
+	car.apply_state(state, false, 0.04)
+	_expect(is_equal_approx(float(car.get("_jump_time")), Cube.JUMP_DURATION),
+		"Turning motion back on must not resurrect a suppressed jump.")
+	car.play_jump()
+	car.reset_motion()
+	car.apply_state(state)
+	_expect(car.chassis.position == Vector3.ZERO,
+		"Replay and recovery must clear takeoff, airborne and landing transients.")
+	car.steady_cabin = true
+	car.play_jump()
+	car.apply_state(state, false, 0.04)
+	_expect(car.chassis.position == Vector3.ZERO
+		and is_equal_approx(car.chassis.rotation.z, -state.angle),
+		"Cockpit view must keep panels steady around its fixed eye while preserving physical pitch.")
+	car.steady_cabin = false
+	car.apply_state(state)
+	_expect(car.chassis.position.y < -0.025,
+		"Leaving Cockpit must restore the current exterior animation, not restart or discard it.")
+	car.play_jump()
+	state.failed = true
+	car.apply_state(state, false, 0.04)
+	_expect(car.chassis.position == Vector3.ZERO,
+		"Jump animation must not continue behind terminal results.")
+	car.free()
+
+
+func _test_impact_animation() -> void:
+	var car := Cube.new()
+	var other := Cube.new()
+	get_root().add_child(car)
+	get_root().add_child(other)
+	var state := State.new()
+	state.damage_stage = State.MAX_DAMAGE_STAGE
+	car.apply_state(state)
+	other.apply_state(state)
+	var body := car.chassis.get_node("BrownBodywork") as MeshInstance3D
+	var other_body := other.chassis.get_node("BrownBodywork") as MeshInstance3D
+	car.play_impact()
+	car.apply_state(state, false, 0.04)
+	_expect(car.chassis.position.length() > 0.02 and absf(car.chassis.rotation.z) > 0.02
+		and body.material_overlay != null and other_body.material_overlay == null,
+		"Even at maximum damage, impacts must recoil and highlight only the affected car.")
+	var pose := car.chassis.transform
+	var age: float = car.get("_impact_time")
+	paused = true
+	car.apply_state(state, false, 1.0)
+	_expect(car.chassis.transform.is_equal_approx(pose) and car.get("_impact_time") == age,
+		"Pausing or paused redraws must freeze, not restart or advance, an impact.")
+	paused = false
+	car.set_finish(Options.PAINT_SIGNAL, Options.RIM_GRAPHITE)
+	car.apply_state(state, false, 0.0, false, false)
+	_expect(body.material_overlay == null and car.damage_stage == State.MAX_DAMAGE_STAGE
+		and car.chassis.transform.is_equal_approx(pose),
+		"Disabling intense effects must clear the highlight without repairing or moving the car.")
+	car.apply_state(state, false, 0.0, true)
+	_expect(body.material_overlay == null and car.chassis.position == Vector3.ZERO
+		and is_zero_approx(car.chassis.rotation.z),
+		"Reduced motion must immediately clear decorative impact motion and highlights.")
+	car.apply_state(state, false, 0.05)
+	_expect(body.material_overlay == null,
+		"Re-enabling animation cannot resurrect an accessibility-suppressed impact.")
+	car.play_impact()
+	for frame in 60:
+		car.apply_state(state, false, 1.0 / 60.0)
+	_expect(car.chassis.position == Vector3.ZERO and body.material_overlay == null,
+		"An impact must settle completely, without an idle shake or stuck overlay.")
+	car.play_impact()
+	car.reset_motion()
+	car.apply_state(state)
+	_expect(car.chassis.position == Vector3.ZERO and body.material_overlay == null,
+		"Recovery and replay resets must clear the complete transient pose.")
+	car.play_impact()
+	state.failed = true
+	car.apply_state(state, false, 0.04)
+	_expect(car.chassis.position == Vector3.ZERO and body.material_overlay == null,
+		"A failed run must not keep animating behind results.")
+	car.free()
+	other.free()
 
 
 func _test_brake_animation() -> void:
@@ -235,6 +769,119 @@ func _test_brake_animation() -> void:
 	car.apply_state(state, true)
 	_expect(is_zero_approx(car.brake_level), "A recovery must clear stale brake input.")
 	car.free()
+
+
+func _test_camera_modes() -> void:
+	var view := View.new()
+	get_root().add_child(view)
+	view.size = Vector2(1280, 720)
+	view.set_day_night_enabled(false)
+	var reference: State
+	for mode in [View.CameraMode.SIDE, View.CameraMode.CHASE, View.CameraMode.COCKPIT]:
+		var state := State.new()
+		view.configure(state)
+		view.set_camera_mode(mode)
+		var positions_finite := true
+		var terrain_clear := true
+		var car_in_front := true
+		for frame in 60 * 60:
+			var input := Driver.controls(state)
+			state.advance(1.0 / 60.0, input.x, input.y, input.z, Driver.jump_pressed(state))
+			var position := state.position
+			var clock := state.adjusted_time()
+			view.present(1.0 / 60.0)
+			_check_wheel_droop(view.world.car, state)
+			_expect(state.position == position and state.adjusted_time() == clock,
+				"A camera presentation must never move the simulation or spend race time.")
+			positions_finite = positions_finite and view.world_camera.transform.is_finite()
+			if mode == View.CameraMode.CHASE:
+				terrain_clear = terrain_clear and _chase_sightline_clear(view)
+				car_in_front = car_in_front \
+					and not view.world_camera.is_position_behind(Art.world_point(state.position))
+			if state.is_over():
+				break
+		_expect(state.finished and state.recoveries == 0 and positions_finite,
+			"%s must follow a complete clean drive without invalid transforms." % view.camera_name())
+		_expect(terrain_clear and car_in_front,
+			"The chase camera must keep both its eye and its sight line clear of the exact road.")
+		if reference == null:
+			reference = state
+		else:
+			_expect(state.position == reference.position and state.elapsed == reference.elapsed
+				and state.score() == reference.score() and state.lives_left == reference.lives_left,
+				"Side, Chase and Cockpit must complete exactly the same physics and scoring run.")
+	var state := State.new()
+	state.advance(0.5, 0, 0, 0)
+	view.configure(state)
+	view.set_camera_mode(View.CameraMode.CHASE)
+	var normal_eye := view.world_camera.position
+	state.position.x += 30.0
+	view.present(1.0 / 60.0)
+	_expect(view.world_camera.position != normal_eye,
+		"The chase eye must track actual movement rather than stay at its first pose.")
+	var paused_pose := view.world_camera.transform
+	paused = true
+	view.present(2.0)
+	_expect(view.world_camera.transform.is_equal_approx(paused_pose),
+		"Direct paused redraws must not keep easing the chase camera.")
+	paused = false
+	view.set_reduced_motion(true)
+	var slow_target: Vector3 = view.get("_chase_target")
+	state.velocity.x = 600.0
+	view.present(0.1)
+	_expect((view.get("_chase_target") as Vector3).is_equal_approx(slow_target),
+		"Reduced motion must remove decorative speed look-ahead.")
+	view.set_reduced_motion(false)
+	for frame in 30:
+		view.present(1.0 / 60.0)
+	_expect((view.get("_chase_target") as Vector3).x > slow_target.x + 1.0,
+		"Normal chase driving must reveal more of the road ahead at speed.")
+	state.recover()
+	view.present(1.0 / 60.0)
+	_expect(view.world_camera.position.distance_to(
+		Art.world_point(state.position) + View.CHASE_OFFSET) < 0.001,
+		"Recovery must snap the chase camera to the checkpoint, not interpolate across the course.")
+	view.set_camera_mode(View.CameraMode.COCKPIT)
+	for stage in State.DAMAGE_NAMES.size():
+		state.damage_stage = stage
+		view.present(0.0)
+		var eye := view.world.car.cockpit_position()
+		_expect(eye.is_finite() and view.world.car.local_bounds().has_point(eye)
+			and view.world_camera.near < 0.05,
+			"Every damage stage must retain a real cabin eye with a close dashboard clipping plane.")
+		var pose := view.world_camera.transform
+		view.world.car.play_impact()
+		view.present(0.04)
+		_expect(view.world_camera.transform.is_equal_approx(pose),
+			"The cockpit must not inherit decorative impact recoil or body rocking.")
+	state.angle = -0.35
+	view.present(0.0)
+	var forward := -view.world_camera.basis.z
+	_expect(forward.x > 0.9 and forward.y > 0.25,
+		"Cockpit aiming must retain essential nose-up pitch rather than point through the dashboard.")
+	view.configure(State.new())
+	_expect(view.camera_mode == View.CameraMode.COCKPIT,
+		"Replay must retain the selected camera while resetting its follow state.")
+	view.set_camera_mode(View.CameraMode.SIDE)
+	_expect(view.world_camera.projection == Camera3D.PROJECTION_ORTHOGONAL
+		and not view.world.car.steady_cabin
+		and not view.world.daylight.environment.fog_enabled
+		and is_equal_approx(view.world_camera.near, 0.1)
+		and (view.get_node("WorldImage") as TextureRect).material == null,
+		"Returning to Side must restore the original projection and clear perspective haze and stale blur.")
+	view.free()
+
+
+func _chase_sightline_clear(view: View) -> bool:
+	var at := view.world_camera.position
+	var anchor := Art.world_point(view.state.position) + Vector3(0, 0.3, 0)
+	for sample in range(1, 33):
+		var point := anchor.lerp(at, sample / 32.0)
+		var ground := Course.ground_height(point.x / Art.WORLD_SCALE)
+		if is_finite(ground) and point.y < (Art.HEIGHT_ORIGIN - ground) * Art.WORLD_SCALE \
+			+ View.CAMERA_CLEARANCE - 0.001:
+			return false
+	return true
 
 
 func _test_daylight() -> void:
@@ -397,14 +1044,23 @@ func _test_parking_and_night() -> void:
 func _test_terrain_and_accessibility() -> void:
 	var world := Landscape.new()
 	get_root().add_child(world)
+	var pools := world.get_node("QuarryWater") as Node3D
+	var ripples := world.get_node("QuietWaterRipples") as Node3D
+	var clouds := world.get_node("SlowDriftingClouds") as Node3D
+	_expect(pools.get_child_count() == Course.gap_intervals().size()
+		and ripples.get_child_count() == pools.get_child_count() and clouds.get_child_count() > 8,
+		"Water, ripples and clouds must extend along the route in locally culled groups.")
+	for group in [pools, ripples, clouds]:
+		for mesh: MeshInstance3D in group.get_children():
+			_expect(mesh.mesh.get_aabb().size.x < 20.0,
+				"An ambient batch must not stretch across the whole doubled course.")
 	var road := world.get_node("ExactDrivingSurface") as MeshInstance3D
 	var faces := road.mesh.get_faces()
-	var gap_start: float = Course.ROADS[0][-1].x * Art.WORLD_SCALE
-	var gap_end: float = Course.ROADS[1][0].x * Art.WORLD_SCALE
 	for offset in range(0, faces.size(), 3):
 		var center := (faces[offset] + faces[offset + 1] + faces[offset + 2]) / 3.0
-		_expect(not (center.x > gap_start and center.x < gap_end),
-			"The 3D driving surface must not bridge the model's quarry gap.")
+		for gap in Course.gap_intervals():
+			_expect(not (center.x > gap.x * Art.WORLD_SCALE and center.x < gap.y * Art.WORLD_SCALE),
+				"The 3D driving surface must not bridge any of the four physics gaps.")
 		for index in 3:
 			var vertex := faces[offset + index]
 			var height := Course.ground_height(vertex.x / Art.WORLD_SCALE)
@@ -415,7 +1071,8 @@ func _test_terrain_and_accessibility() -> void:
 	state.advance(0.5, 0, 0, 0)
 	var flag_materials: Array[StandardMaterial3D] = world.get("_flag_materials")
 	var original_flag_color := flag_materials[0].albedo_color
-	_expect(flag_materials.size() == 2 and flag_materials[0] != flag_materials[1],
+	_expect(flag_materials.size() == Course.CHECKPOINT_X.size() - 1
+		and flag_materials[0] != flag_materials[1],
 		"Each imported checkpoint must own its live field material.")
 	for index in world.plugs.size():
 		var imported := world.plugs[index].get_node("ImportedPlug") as Node3D
@@ -429,7 +1086,8 @@ func _test_terrain_and_accessibility() -> void:
 			and (world.plugs[index].get_node("PickupNumber") as Label3D).text == str(index + 1),
 			"Imported pickups must retain their gold ring and distinct readable numbers.")
 	var trees := _pine_poses(world)
-	_expect(trees.size() == 20, "The imported forest must retain the authored planting count.")
+	_expect(trees.size() > 20 and trees[-1].origin.x > Course.FINISH_X * Art.WORLD_SCALE,
+		"The imported forest must extend past the relocated garage, not stop at the old finish.")
 	for tree in trees:
 		var planted: Vector3 = world.call("_terrain_point", tree.origin.x, tree.origin.z)
 		_expect(tree.origin.is_equal_approx(planted),
@@ -502,6 +1160,7 @@ func _test_terrain_and_accessibility() -> void:
 		"Moving tires may emit dust when both visual preferences allow it.")
 	world.present(state, 0.0, true, true, false)
 	_expect(dust.multimesh.visible_instance_count == 0
+		and clouds.position == Vector3.ZERO and ripples.position == Vector3.ZERO
 		and world.plugs[1].rotation == Vector3.ZERO
 		and world.plugs[1].position.is_equal_approx(Art.world_point(Course.plug_position(1)))
 		and world.checkpoint_flags[0].rotation.is_zero_approx()
@@ -582,6 +1241,13 @@ func _test_gallery_provenance(stage: Node) -> void:
 	_expect(car.local_bounds().size.is_equal_approx(reference.local_bounds().size)
 		and is_zero_approx(car.brake_level),
 		"The exhibited car must be parked at the trial's own ride height.")
+	var suspension: Node3D = stage.call("build_exhibit", Options.EXHIBIT_SUSPENSION)
+	var shown := suspension.get_node("Strut") as Coilover
+	_expect(shown != null and shown.mesh == reference.springs[0].mesh
+		and absf(shown.length - reference.springs[0].length) < 0.003
+		and GalleryStage.bounds_of(suspension).is_equal_approx(shown.custom_aabb),
+		"The coilover exhibit must share the live car's mechanical model, preload and deformed bounds.")
+	suspension.free()
 	reference.free()
 	car.free()
 
@@ -764,6 +1430,24 @@ func _test_store_finishes() -> void:
 	reference.set_finish()
 	_expect(_overrides(reference).is_empty(),
 		"Stripping a car back to factory must clear every override.")
+	var reversed := ArrayMesh.new()
+	for surface in range(body.mesh.get_surface_count() - 1, -1, -1):
+		reversed.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,
+			body.mesh.surface_get_arrays(surface))
+		reversed.surface_set_material(reversed.get_surface_count() - 1,
+			body.mesh.surface_get_material(surface))
+	var reordered := MeshInstance3D.new()
+	reordered.mesh = reversed
+	Finish.dress_body(reordered, "cube_paint_signal")
+	for surface in reversed.get_surface_count():
+		var label := reversed.surface_get_material(surface).resource_name
+		var expected := Finish.swatch("cube_paint_signal")
+		if label == Finish.BODY_EDGE:
+			expected = expected.darkened(Finish.EDGE_DARKEN)
+		_expect((reordered.get_active_material(surface) as StandardMaterial3D)
+			.albedo_color.is_equal_approx(expected),
+			"Cached finishes must follow material identity even when damage exports reorder surfaces.")
+	reordered.free()
 	reference.free()
 
 	# The wheel a rim card shows is the imported alloy, wearing that finish.

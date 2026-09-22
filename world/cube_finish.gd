@@ -87,9 +87,9 @@ const RIMS := {
 	},
 }
 
-## Restated materials, keyed by `item id` + `surface name`. The car wears four
-## wheels and the shop shelves a card per colour, so without this every wheel
-## and every card would carry its own copy of the same finish.
+## Restated materials, keyed by item id and exported material identity. The car
+## wears four wheels and the shop shelves a card per colour, so without this
+## every wheel and every card would carry its own copy of the same finish.
 static var _coats: Dictionary = {}
 
 
@@ -165,15 +165,13 @@ static func _coat(
 	finish: Dictionary,
 	extra_roughness: float,
 ) -> StandardMaterial3D:
-	var key := "%s/%d" % [id, surface]
+	var exported := mesh.surface_get_material(surface) as StandardMaterial3D
+	assert(exported != null, "A Cube finish requires a portable exported material.")
+	var key := "%s/%d" % [id, exported.get_instance_id()]
 	var cached: StandardMaterial3D = _coats.get(key, null)
 	if cached != null:
 		return cached
-	var exported := mesh.surface_get_material(surface) as StandardMaterial3D
-	var coat := (
-		exported.duplicate() as StandardMaterial3D if exported != null
-		else StandardMaterial3D.new()
-	)
+	var coat := exported.duplicate() as StandardMaterial3D
 	coat.resource_name = key
 	coat.albedo_color = color
 	coat.metallic = float(finish["metallic"])

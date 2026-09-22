@@ -8,6 +8,7 @@ import hashlib
 import json
 import math
 import struct
+import sys
 from collections import defaultdict
 from pathlib import Path
 
@@ -340,6 +341,11 @@ def main():
         "geometry_before_reduction": before_triangles, "micro_details_removed": excluded,
         "source_sha256": source_hash, "forward": "+X", "up": "+Y",
     }))
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from cube_damage import export_damage
+    export_damage(chassis, list(exported_pivots.values()), source_hash)
+    if hashlib.sha256(source_path.read_bytes()).hexdigest() != source_hash:
+        raise RuntimeError("The pristine authoring file changed during damage export.")
 
 
 if __name__ == "__main__":

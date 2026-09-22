@@ -12,6 +12,7 @@ const Cube = preload("res://games/cube_trials/world/cube_model.gd")
 const View = preload("res://games/cube_trials/course_view.gd")
 const GalleryStage = preload("res://games/cube_trials/gallery_stage.gd")
 const Daylight = preload("res://games/cube_trials/world/daylight.gd")
+const TrialHUD = preload("res://games/cube_trials/trial_hud.gd")
 
 var _failures := PackedStringArray()
 var _game: Node
@@ -64,24 +65,30 @@ func _run() -> void:
 	_expect(not (_game.get("_engine") as AudioStreamPlayer).playing,
 		"The engine toggle must stop a real playing voice.")
 	_game.call("_on_play_again_pressed")
-	for dimensions in [Vector2i(1280, 720), Vector2i(390, 844), Vector2i(2560, 720)]:
-		(_game.get_node("%PauseButton") as Control).visible = dimensions.y > dimensions.x
+	for dimensions in [
+		Vector2i(1280, 720), Vector2i(390, 844), Vector2i(320, 844), Vector2i(2560, 720),
+	]:
 		get_root().size = dimensions
 		await _render_frames()
 		_test_bounds()
 		_test_brown_cube()
 		_test_draw_budget()
 		await _capture("trail-%dx%d" % [dimensions.x, dimensions.y])
+		await _test_full_hud()
 	get_root().size = Vector2i(390, 844)
 	settings.call("set_value", "ui/scale", 1.5)
 	await _render_frames()
 	_test_bounds()
 	await _capture("portrait-large-ui")
 	settings.call("set_value", "ui/scale", 1.0)
+	await _test_caption_layout(settings)
 	get_root().size = Vector2i(1280, 720)
-	(_game.get_node("%PauseButton") as Control).hide()
 	await _render_frames()
-	await _test_rendered_brakes()
+	await _test_rendered_impacts()
+	await _test_rendered_coilovers()
+	await _test_damage_looks()
+	for stage in State.DAMAGE_NAMES.size():
+		await _test_rendered_brakes(stage)
 	await _test_motion_blur()
 	_game.call("_on_play_again_pressed")
 	await _render_frames()
@@ -102,14 +109,28 @@ func _run() -> void:
 		"The camera must show the far-side landing during the quarry jump.")
 	_test_brown_cube()
 	_test_draw_budget()
+	await _check_rendered_coilovers(view as View, "quarry-flight", true)
 	await _capture("quarry-jump")
+	for index in range(1, Course.gap_intervals().size()):
+		var gap := Course.gap_intervals()[index]
+		_drive_to((gap.x + gap.y) * 0.5)
+		await _render_frames()
+		_expect(state.contacts == 0 and state.recoveries == 0,
+			"Each new ravine capture must be a clean, input-driven manual jump.")
+		var far_side := Vector2(gap.y + 140.0, Course.ground_height(gap.y + 140.0))
+		_expect(Rect2(Vector2.ZERO, view.size).has_point(
+			view.call("project_point", Art.world_point(far_side))),
+			"The side camera must reveal the landing across every wider ravine.")
+		_test_brown_cube()
+		_test_draw_budget()
+		await _capture("ravine-jump-%d" % index)
 	_drive_to(Course.FINISH_X - 80.0)
 	await _render_frames()
 	_test_brown_cube()
 	_test_draw_budget()
 	await _capture("imported-garage-approach")
 	await _test_parking_and_night()
-	_drive_to(6000.0)
+	_drive_to(Course.END_X)
 	await _render_frames()
 	_expect(state.finished, "The rendered run must reach the real garage finish.")
 	_test_draw_budget()
@@ -152,7 +173,7 @@ func _run() -> void:
 func _drive_to(x: float) -> void:
 	var state: State = _game.get("_state")
 	for frame in 60 * 90:
-		if state.position.x >= x or state.finished:
+		if state.position.x >= x or state.is_over():
 			break
 		Driver.hold_controls(state)
 		_game.call("_update_round", 1.0 / 60.0, 0.0)
@@ -165,30 +186,293 @@ func _test_bounds() -> void:
 	var visible := get_root().get_visible_rect()
 	var physical_scale := float(get_root().size.x) / visible.size.x
 	var view_rect := view.get_global_rect()
-	_expect(view_rect.size.y * physical_scale >= 180.0,
-		"The trail needs at least 180 physical pixels of usable height.")
+	_expect(view_rect.get_area() >= visible.get_area() * 0.80,
+		"The expanded game view must occupy at least 80 percent of the screen at %s (actual %.1f%%)."
+		% [get_root().size, view_rect.get_area() / visible.get_area() * 100.0])
 	_expect(visible.encloses(view_rect) and visible.encloses(controls.get_global_rect()),
 		"The course and every pedal must remain inside the viewport.")
 	_expect(view_rect.end.y < controls.get_global_rect().position.y,
 		"Driving controls cannot cover the car or road.")
 	var buttons: Dictionary = controls.get("buttons")
-	for action in Options.DRIVE_ACTIONS:
+	for action in buttons:
 		var button: Button = buttons[action]
 		var rect := button.get_global_rect()
 		_expect(rect.size.y * physical_scale >= 44.0,
 			"%s needs a 44-pixel physical touch target." % action)
 		_expect(button.get_theme_font_size("font_size") * physical_scale >= 12.0,
 			"%s must retain legible text on a phone." % action)
+		_expect(button.icon != null
+			and button.get_theme_constant("icon_max_width") * physical_scale >= 18.0
+			and not button.accessibility_name.is_empty(),
+			"%s needs a legible action icon and a screen-reader description." % action)
 		_expect(visible.encloses(rect), "%s must not extend off-screen." % action)
 	var pause_button := _game.get_node("%PauseButton") as Control
-	if pause_button.visible:
-		_expect(visible.encloses(pause_button.get_global_rect()),
-			"The mobile pause affordance must fit beside the HUD.")
-		_expect(pause_button.size.y * physical_scale >= 44.0,
-			"The mobile pause button needs a real 44-pixel touch target too.")
+	_expect(pause_button.is_visible_in_tree()
+		and visible.encloses(pause_button.get_global_rect()),
+		"The icon pause affordance must remain available and on-screen on every device.")
+	_expect(pause_button.size.y * physical_scale >= 44.0,
+		"The mobile pause button needs a real 44-pixel touch target too.")
+	var image := get_root().get_texture().get_image()
+	var center := pause_button.get_global_rect().get_center() * physical_scale
+	var pause_ink := 0
+	for y in range(roundi(center.y - 10), roundi(center.y + 10)):
+		for x in range(roundi(center.x - 10), roundi(center.x + 10)):
+			var color := image.get_pixel(clampi(x, 0, image.get_width() - 1),
+				clampi(y, 0, image.get_height() - 1))
+			if color.r > 0.9 and color.g > 0.9 and color.b > 0.9:
+				pause_ink += 1
+	_expect(pause_ink >= 16,
+		"The pause glyph must actually render inside its padding, not just have an icon resource.")
+	var hud := _game.get("_trial_hud") as TrialHUD
+	_expect(view_rect.encloses(hud.camera_button.get_global_rect())
+		and hud.camera_button.size.x * physical_scale >= 44.0
+		and hud.camera_button.size.y * physical_scale >= 44.0
+		and hud.camera_button.get_global_rect().end.x < pause_button.get_global_rect().position.x,
+		"The camera needs its own 44-pixel target immediately beside Pause, including on small phones.")
+	_expect(view_rect.encloses(hud.bar.get_global_rect()),
+		"Life, points, plugs, timer and pause must all fit inside the game view.")
+	var end := hud.bar.global_position.x
+	var row := hud.bar.global_position.y
+	for child: Control in hud.bar.get_children():
+		if child.global_position.y > row + 0.01:
+			end = hud.bar.global_position.x
+			row = child.global_position.y
+		_expect(child.get_global_rect().position.x >= end - 0.01,
+			"HUD counters must not overlap at narrow or large-UI sizes.")
+		end = child.get_global_rect().end.x
+	for label in [hud.lives_label, hud.points_label, hud.plugs_label, hud.time_label]:
+		_expect(label.get_theme_font_size("font_size") * physical_scale >= 16.0
+			and view_rect.encloses(label.get_global_rect()),
+			"Icon counter values must remain legible, unclipped and inside the game view.")
+	if hud.feedback_label.is_visible_in_tree():
+		_expect(view_rect.encloses(hud.feedback_label.get_global_rect()),
+			"Brief event feedback must fit without spilling across the edge of a phone.")
+		_expect(hud.feedback_label.global_position.y - hud.bar.get_global_rect().end.y \
+			<= 24.0 * float(_game.get("_ui_factor")),
+			"Feedback must stay tucked below the counters after portrait/landscape or UI-scale changes.")
 	var car_bounds: Rect2 = view.call("car_screen_bounds")
 	_expect(car_bounds.size.x * physical_scale >= 48.0,
 		"The Cube must remain at least 48 physical pixels wide on a phone.")
+
+
+func _test_full_hud() -> void:
+	var state: State = _game.get("_state")
+	state.collected.fill(true)
+	state.lives_left = 1
+	state.elapsed = 6500.25
+	_game.call("_sync_hud")
+	await _render_frames()
+	_test_bounds()
+	var hud := _game.get("_trial_hud") as TrialHUD
+	_expect(hud.points_label.text == "5000" and hud.lives_label.text == "1"
+		and hud.plugs_label.text == "5/5" and hud.time_label.text.begins_with("108:20"),
+		"Real point totals and even long untimed runs must fit the compact HUD.")
+	await _capture("hud-full-%dx%d" % [get_root().size.x, get_root().size.y])
+	state.collected.fill(false)
+	state.lives_left = State.STARTING_LIVES
+	state.elapsed = 0.0
+	_game.call("_sync_hud")
+
+
+func _test_caption_layout(settings: Node) -> void:
+	settings.call("set_value", Settings.AUDIO_CAPTIONS_KEY, true)
+	get_root().get_node("AudioManager").call("request_caption",
+		"Roof hit the trail. One life lost. 4 lives left. Recovering at checkpoint 0. +5 seconds.")
+	await _render_frames()
+	_test_bounds()
+	var caption := _game.get("_audio_caption") as Control
+	var label := caption.get_node("CaptionLabel") as Label
+	var view := _game.get("_view") as Control
+	var controls := _game.get("_controls") as Control
+	var scale := float(get_root().size.x) / get_root().get_visible_rect().size.x
+	_expect(caption.is_visible_in_tree() and label.get_theme_font_size("font_size") * scale >= 14.0
+		and view.get_global_rect().end.y < caption.get_global_rect().position.y
+		and caption.get_global_rect().end.y < controls.get_global_rect().position.y,
+		"Optional audio captions must stay readable on phones without obscuring the road or pedals.")
+	await _capture("portrait-audio-captions")
+	settings.call("set_value", Settings.AUDIO_CAPTIONS_KEY, false)
+
+
+func _test_rendered_impacts() -> void:
+	var view := _game.get("_view") as View
+	var state: State = _game.get("_state")
+	_game.call("_set_reduced_motion_enabled", false)
+	_game.call("_set_intense_effects_enabled", true)
+	state.advance(0.5, 0.0, 0.0, 0.0)
+	state.damage_stage = 1
+	for dimensions in [Vector2i(1280, 720), Vector2i(390, 844)]:
+		get_root().size = dimensions
+		view.world.car.reset_motion()
+		view.present(0.0)
+		await _render_frames()
+		_test_bounds()
+		var scale := Vector2(view.world_viewport.size) / view.size
+		var bounds := view.car_screen_bounds()
+		var crop := Rect2i(Rect2(bounds.position * scale, bounds.size * scale).grow(8.0))
+		crop = crop.intersection(Rect2i(Vector2i.ZERO, view.world_viewport.size))
+		var before := view.world_viewport.get_texture().get_image().get_region(crop)
+		view.world.car.play_impact()
+		view.present(0.04)
+		await _render_frames()
+		var impact := view.world_viewport.get_texture().get_image().get_region(crop)
+		var changed := 0
+		for y in impact.get_height():
+			for x in impact.get_width():
+				if _color_difference(before.get_pixel(x, y), impact.get_pixel(x, y)) > 0.08:
+					changed += 1
+		_expect(changed >= maxi(12, floori(crop.get_area() * 0.015)),
+			"An impact must visibly animate the real car at %s, not just update an internal timer."
+			% dimensions)
+		_test_draw_budget()
+		await _capture("impact-%dx%d" % [dimensions.x, dimensions.y])
+		view.set_reduced_motion(true)
+		var body := view.world.car.chassis.get_node("BrownBodywork") as MeshInstance3D
+		_expect(body.material_overlay == null and view.world.car.chassis.position == Vector3.ZERO,
+			"Live reduced motion must remove the rendered highlight and decorative recoil.")
+		view.set_reduced_motion(false)
+	_game.call("_on_play_again_pressed")
+	_game.call("_set_reduced_motion_enabled", true)
+	get_root().size = Vector2i(1280, 720)
+	await _render_frames()
+
+
+func _test_rendered_coilovers() -> void:
+	var view := _game.get("_view") as View
+	_game.call("_set_reduced_motion_enabled", false)
+	_game.call("_set_intense_effects_enabled", true)
+	view.set_day_night_enabled(false)
+	for dimensions in [Vector2i(1280, 720), Vector2i(390, 844)]:
+		get_root().size = dimensions
+		_game.call("_on_play_again_pressed")
+		var state: State = _game.get("_state")
+		_game.call("_update_round", 0.5, 0.0)
+		await _render_frames()
+		var resting := view.world.car.springs[1].length
+		await _check_rendered_coilovers(view, "parked", false)
+		Input.action_press(Options.JUMP)
+		for frame in 100:
+			_game.call("_update_round", 1.0 / 60.0, 0.0)
+			Input.action_release(Options.JUMP)
+			if frame not in [3, 25, 62, 72, 99]:
+				continue
+			var pose := "takeoff" if frame == 3 else ("airborne" if frame == 25 \
+				else ("landing" if frame == 62 else ("rebound" if frame == 72 else "settled")))
+			await _render_frames()
+			var airborne := frame in [3, 25]
+			_expect((state.contacts == 0) == airborne,
+				"The coilover capture must sample the intended flight or grounded phase: %s." % pose)
+			var visible_pixels := await _check_rendered_coilovers(view, pose, airborne)
+			_test_bounds()
+			_test_draw_budget()
+			if frame == 25:
+				_expect(state.contacts == 0 and view.world.car.springs[1].length > resting + 0.25,
+					"The airborne wheels must drop slightly farther to reveal the extended coilovers.")
+				await _test_rendered_wheel_droop(view, state, visible_pixels)
+			await _capture("coilovers-%s-%dx%d" % [pose, dimensions.x, dimensions.y])
+		Input.action_press(Options.THROTTLE)
+		_game.call("_update_round", 0.2, 0.0)
+		Input.action_release(Options.THROTTLE)
+		await _render_frames()
+		_expect(state.contacts > 0, "The driving coilover check must stay on the trail.")
+		await _check_rendered_coilovers(view, "driving", false)
+		Input.action_press(Options.BRAKE)
+		_game.call("_update_round", 0.15, 0.0)
+		Input.action_release(Options.BRAKE)
+		await _render_frames()
+		_expect(state.contacts > 0, "The braking coilover check must stay on the trail.")
+		await _check_rendered_coilovers(view, "braking", false)
+		state.damage_stage = State.MAX_DAMAGE_STAGE
+		view.present(0.0)
+		await _render_frames()
+		await _check_rendered_coilovers(view, "battered", false)
+		view.set_reduced_motion(true)
+		view.set_intense_effects(false)
+		Input.action_press(Options.JUMP)
+		_game.call("_update_round", 0.25, 0.0)
+		Input.action_release(Options.JUMP)
+		await _render_frames()
+		await _check_rendered_coilovers(view, "reduced-motion", true)
+		_expect(view.world.car.chassis.position == Vector3.ZERO
+			and view.world.car.springs[1].length > resting + 0.06,
+			"Real suspension extension must remain visible without decorative motion or intense effects.")
+		state.recover()
+		view.present(0.0)
+		await _render_frames()
+		await _check_rendered_coilovers(view, "recovered", false)
+		_game.call("_on_play_again_pressed")
+		await _render_frames()
+		await _check_rendered_coilovers(view, "replay", false)
+		view.set_reduced_motion(false)
+		view.set_intense_effects(true)
+	_game.call("_on_play_again_pressed")
+	_game.call("_set_reduced_motion_enabled", true)
+	view.set_day_night_enabled(true)
+	get_root().size = Vector2i(1280, 720)
+	await _render_frames()
+
+
+func _test_rendered_wheel_droop(view: View, state: State, extended_pixels: PackedInt32Array) -> void:
+	var car := view.world.car
+	for index in 2:
+		var physical_center := Art.world_point(state.wheel_centers[index])
+		_expect(car.axles[index].global_position.distance_to(physical_center) >= 0.14,
+			"The rendered wheel must actually move away from the fender in mid-flight.")
+		var center := physical_center - car.position
+		car.axles[index].position = center
+		var mount := car.chassis.position + car.chassis.basis \
+			* Vector3(State.AXLES[index].x, -State.AXLES[index].y, 0) * Art.WORLD_SCALE
+		car.call("_pose_suspension", index, mount, center)
+	await _render_frames()
+	var original_pixels := await _check_rendered_coilovers(view, "without-extra-wheel-drop", true)
+	for index in 2:
+		var minimum_gain := 2 if get_root().size.x < 600 else 8
+		_expect(extended_pixels[index] >= original_pixels[index] + minimum_gain,
+			"Wheel droop must reveal more coilover pixels at %s, not just move a hidden mesh "
+			% get_root().size + "(axle %d: %d -> %d, need +%d)."
+			% [index, original_pixels[index], extended_pixels[index], minimum_gain])
+	view.present(0.0)
+	await _render_frames()
+
+
+func _check_rendered_coilovers(view: View, pose: String, airborne: bool) -> PackedInt32Array:
+	var shown := view.world_viewport.get_texture().get_image()
+	var counts := PackedInt32Array()
+	var visibility: Array[bool] = []
+	for strut in view.world.car.springs:
+		visibility.append(strut.visible)
+		_expect(strut.visible == airborne,
+			"Coilovers must be enabled only during flight, not grounded phases: %s." % pose)
+		strut.hide()
+	await _render_frames()
+	var hidden := view.world_viewport.get_texture().get_image()
+	for index in view.world.car.springs.size():
+		view.world.car.springs[index].visible = visibility[index]
+	var render_scale := Vector2(view.world_viewport.size) / view.size
+	for index in [1, 3]:
+		var strut := view.world.car.springs[index]
+		var rect := Rect2()
+		for corner in 8:
+			var point := view.project_point(strut.to_global(strut.custom_aabb.get_endpoint(corner)))
+			rect = Rect2(point, Vector2.ZERO) if corner == 0 else rect.expand(point)
+		var crop := Rect2i(Rect2(rect.position * render_scale, rect.size * render_scale).grow(2.0))
+		crop = crop.intersection(Rect2i(Vector2i.ZERO, view.world_viewport.size))
+		var visible_pixels := 0
+		for y in range(crop.position.y, crop.end.y):
+			for x in range(crop.position.x, crop.end.x):
+				if _color_difference(shown.get_pixel(x, y), hidden.get_pixel(x, y)) > 0.06:
+					visible_pixels += 1
+		var minimum := 6 if get_root().size.x < 600 else 24
+		counts.append(visible_pixels)
+		if airborne:
+			_expect(visible_pixels >= minimum,
+				"Coilover %d must show inside the wheel well during %s at %s (%d visible pixels, need %d)."
+				% [index, pose, get_root().size, visible_pixels, minimum])
+		else:
+			_expect(visible_pixels == 0,
+				"Coilover %d must be concealed during %s at %s (%d exposed pixels)."
+				% [index, pose, get_root().size, visible_pixels])
+	await _render_frames()
+	return counts
 
 
 func _test_brown_cube() -> void:
@@ -253,7 +537,7 @@ func _test_imported_gallery() -> void:
 		get_root().size = dimensions
 		await _render_frames()
 		stage.size = get_root().get_visible_rect().size
-		for id: String in [Options.EXHIBIT_PLUG, Options.EXHIBIT_CHECKPOINT,
+		for id: String in [Options.EXHIBIT_SUSPENSION, Options.EXHIBIT_PLUG, Options.EXHIBIT_CHECKPOINT,
 				Options.EXHIBIT_PINE, Options.EXHIBIT_GARAGE]:
 			stage.configure({"id": id})
 			for pose: Vector2 in [Vector2.ZERO, Vector2(PI * 0.5, 0.0),
@@ -269,7 +553,7 @@ func _test_imported_gallery() -> void:
 					"*", "MeshInstance3D", true, false
 				):
 					for corner in 8:
-						var point := part.to_global(part.mesh.get_aabb().get_endpoint(corner))
+						var point := part.to_global(Cube.mesh_bounds(part).get_endpoint(corner))
 						contained = contained and not camera.is_position_behind(point) \
 							and picture.has_point(camera.unproject_position(point))
 				_expect(contained, "%s must fit its gallery case at %s, pose %s."
@@ -297,10 +581,12 @@ func _test_draw_budget() -> void:
 		% [draws, triangles])
 
 
-func _test_rendered_brakes() -> void:
+func _test_rendered_brakes(stage: int) -> void:
 	var view := _game.get("_view") as View
 	var car: Cube = view.world.car
 	var state: State = _game.get("_state")
+	var saved_damage := state.damage_stage
+	state.damage_stage = stage
 	var saved_transform := view.world_camera.transform
 	var saved_size := view.world_camera.size
 	view.world_camera.position = car.position + Vector3(-5.5, 2.3, 5.5)
@@ -322,15 +608,69 @@ func _test_rendered_brakes() -> void:
 				and bright.r > bright.b * 1.5:
 				brighter_red += 1
 	_expect(brighter_red > 12,
-		"Braking must visibly brighten the rendered red lenses, not only a material property.")
+		"Stage %d braking must visibly brighten the rendered red lenses, not only a material property."
+		% stage)
 	car.apply_state(state, true, 0.0, false, true)
 	await _render_frames()
 	_test_draw_budget()
-	await _capture("brakes-on")
+	await _capture("brakes-on" if stage == 0 else "damage-%d-brakes-on" % stage)
 	car.apply_state(state, false)
+	state.damage_stage = saved_damage
 	view.world_camera.transform = saved_transform
 	view.world_camera.size = saved_size
 	view.present(0.0)
+
+
+func _test_damage_looks() -> void:
+	var view := _game.get("_view") as View
+	var state: State = _game.get("_state")
+	var reduced := view.reduced_motion
+	var intense := view.intense_effects
+	view.set_reduced_motion(true)
+	view.set_intense_effects(false)
+	for dimensions in [Vector2i(1280, 720), Vector2i(390, 844)]:
+		get_root().size = dimensions
+		state.damage_stage = 0
+		view.present(0.0)
+		await _render_frames()
+		var scale := Vector2(view.world_viewport.size) / view.size
+		var bounds := view.car_screen_bounds()
+		var crop := Rect2i(Rect2(bounds.position * scale, bounds.size * scale).grow(8.0))
+		crop = crop.intersection(Rect2i(Vector2i.ZERO, view.world_viewport.size))
+		var previous: Image
+		var sheet := Image.create(crop.size.x * State.DAMAGE_NAMES.size(), crop.size.y,
+			false, Image.FORMAT_RGBA8)
+		for stage in State.DAMAGE_NAMES.size():
+			state.damage_stage = stage
+			view.present(0.0)
+			await _render_frames()
+			var image := view.world_viewport.get_texture().get_image().get_region(crop)
+			image.convert(Image.FORMAT_RGBA8)
+			if previous != null:
+				var changed := 0
+				for y in image.get_height():
+					for x in image.get_width():
+						if _color_difference(image.get_pixel(x, y),
+							previous.get_pixel(x, y)) > 0.12:
+							changed += 1
+				_expect(changed >= maxi(12, floori(crop.get_area() * 0.006)),
+					"Damage stage %d must visibly differ from %d at %s: only %d changed car pixels."
+					% [stage, stage - 1, dimensions, changed])
+			sheet.blit_rect(image, Rect2i(Vector2i.ZERO, image.get_size()),
+				Vector2i(stage * crop.size.x, 0))
+			previous = image
+			_test_draw_budget()
+			await _capture("damage-%d-%dx%d" % [stage, dimensions.x, dimensions.y])
+		if not _capture_dir.is_empty():
+			var path := _capture_dir.path_join("damage-stages-%dx%d.png"
+				% [dimensions.x, dimensions.y])
+			_expect(sheet.save_png(path) == OK, "Could not save the damage comparison strip.")
+	state.damage_stage = 0
+	get_root().size = Vector2i(1280, 720)
+	view.set_reduced_motion(reduced)
+	view.set_intense_effects(intense)
+	view.present(0.0)
+	await _render_frames()
 
 
 func _test_motion_blur() -> void:
@@ -366,6 +706,13 @@ func _test_motion_blur() -> void:
 	var changed_world := 0
 	var changed_hud := 0
 	var changed_car := 0
+	var hud_pixels: Array[Rect2] = []
+	var hud := _game.get("_trial_hud") as TrialHUD
+	for child: Control in hud.bar.find_children("*", "Control", true, false):
+		if child is PanelContainer or child is Button:
+			# Rounded transparent corners reveal scenery; sample the opaque HUD interior.
+			var rect := child.get_global_rect().grow(-6.0 * float(_game.get("_ui_factor")))
+			hud_pixels.append(Rect2(rect.position * ratio, rect.size * ratio))
 	for y in range(0, sharp.get_height(), 2):
 		for x in range(0, sharp.get_width(), 2):
 			var difference := _color_difference(sharp.get_pixel(x, y), blurred.get_pixel(x, y))
@@ -373,12 +720,16 @@ func _test_motion_blur() -> void:
 				changed_car += 1
 			if difference < 0.015:
 				continue
-			if world_pixels.has_point(Vector2(x, y)):
-				changed_world += 1
-			else:
+			var in_hud := false
+			for rect in hud_pixels:
+				in_hud = in_hud or rect.has_point(Vector2(x, y))
+			if in_hud or not world_pixels.has_point(Vector2(x, y)):
 				changed_hud += 1
+			else:
+				changed_world += 1
 	_expect(changed_world > 80 and changed_hud == 0,
-		"The shader must blur actual scenery pixels while leaving the entire HUD untouched.")
+		"The shader must blur scenery while leaving HUD content untouched (%d world / %d HUD pixels)."
+		% [changed_world, changed_hud])
 	_expect(changed_car == 0,
 		"The protected car region must retain crisp paint and wheel detail.")
 	image_node.material = blur_material
@@ -463,6 +814,7 @@ func _test_parking_and_night() -> void:
 	_expect(_brighter_pixels(night, without_headlights) > 20,
 		"Automatic headlights must illuminate actual road pixels, not only light their bulbs.")
 	view.present(0.0)
+	await _test_damaged_headlights(view)
 	var workshop := garage.get_node("WorkshopLight") as OmniLight3D
 	workshop.visible = false
 	await _render_frames()
@@ -489,6 +841,26 @@ func _test_parking_and_night() -> void:
 	view.set_day_night_enabled(cycling)
 	view.set_reduced_motion(reduced)
 	view.set_intense_effects(effects)
+	await _render_frames()
+
+
+func _test_damaged_headlights(view: View) -> void:
+	var state: State = _game.get("_state")
+	var saved_damage := state.damage_stage
+	for stage in range(1, State.DAMAGE_NAMES.size()):
+		state.damage_stage = stage
+		view.present(0.0)
+		await _render_frames()
+		var on := view.world_viewport.get_texture().get_image()
+		await _capture("damage-%d-night" % stage)
+		for light in view.world.car.headlights:
+			light.visible = false
+		await _render_frames()
+		var off := view.world_viewport.get_texture().get_image()
+		_expect(_brighter_pixels(on, off) > 20,
+			"Stage %d headlights must still illuminate the road from their displaced sockets." % stage)
+	state.damage_stage = saved_damage
+	view.present(0.0)
 	await _render_frames()
 
 

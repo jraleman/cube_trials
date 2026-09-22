@@ -17,7 +17,6 @@ const Cube = preload("res://games/cube_trials/world/cube_model.gd")
 const Landscape = preload("res://games/cube_trials/world/copper_creek.gd")
 const Options = preload("res://games/cube_trials/cube_trials_options.gd")
 const State = preload("res://games/cube_trials/trial_state.gd")
-const Tuning = preload("res://games/cube_trials/vehicle_tuning.gd")
 
 ## Long enough on the springs for the car to stop bouncing and sit at its real
 ## ride height, which is the only pose worth exhibiting it in.
@@ -169,16 +168,12 @@ func _wheel() -> Node3D:
 	return root
 
 
-## Shown at the length the parked car's own weight settles it to, which is most
-## of its travel already used up — a trials car sits low on purpose.
+## The same exposed coilover, including its fixed housing and the parked spring preload.
 func _suspension() -> Node3D:
 	var root := Node3D.new()
 	root.name = "CoiloverStrut"
-	var strut := MeshInstance3D.new()
+	var strut := Cube.suspension_display()
 	strut.name = "Strut"
-	strut.mesh = Cube.suspension_mesh()
-	strut.material_override = Cube.suspension_material()
-	strut.scale = Vector3(1.0, Tuning.STATIC_LENGTH * Art.WORLD_SCALE, 1.0)
 	root.add_child(strut)
 	return root
 
@@ -320,7 +315,9 @@ static func bounds_of(root: Node3D) -> AABB:
 
 
 static func _collect_bounds(node: Node3D, at: Transform3D, boxes: Array[AABB]) -> void:
-	if node is GeometryInstance3D:
+	if node is MeshInstance3D:
+		boxes.append(at * Cube.mesh_bounds(node))
+	elif node is GeometryInstance3D:
 		boxes.append(at * (node as GeometryInstance3D).get_aabb())
 	for child in node.get_children():
 		var spatial := child as Node3D

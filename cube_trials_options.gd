@@ -14,9 +14,11 @@ const THROTTLE := &"cube_trials_throttle"
 const REVERSE := &"cube_trials_reverse"
 const NOSE_UP := &"cube_trials_nose_up"
 const NOSE_DOWN := &"cube_trials_nose_down"
+const JUMP := &"cube_trials_jump"
 const BRAKE := &"cube_trials_brake"
 const RECOVER := &"cube_trials_recover"
-const DRIVE_ACTIONS: Array[StringName] = [NOSE_UP, NOSE_DOWN, REVERSE, THROTTLE, BRAKE]
+const CAMERA := &"cube_trials_camera"
+const DRIVE_ACTIONS: Array[StringName] = [NOSE_UP, NOSE_DOWN, REVERSE, THROTTLE, JUMP, BRAKE]
 
 const TUNABLES: Array[Dictionary] = [
 	{
@@ -65,8 +67,14 @@ const CONTROL_BINDINGS: Array[Dictionary] = [
 		"heading": "Cube Trials",
 	},
 	{
+		"key": "controls/cube_trials_jump", "action": JUMP,
+		"default": KEY_SPACE, "title": "Jump", "player": 0,
+		"description": "Hop from the trail. Release before jumping again; tilt to land level.",
+		"heading": "Cube Trials",
+	},
+	{
 		"key": "controls/cube_trials_brake", "action": BRAKE,
-		"default": KEY_SPACE, "title": "Brake", "player": 0,
+		"default": KEY_SHIFT, "title": "Brake", "player": 0,
 		"description": "Slow both wheels. Brake inside the garage to finish.",
 		"heading": "Cube Trials",
 	},
@@ -74,6 +82,12 @@ const CONTROL_BINDINGS: Array[Dictionary] = [
 		"key": "controls/cube_trials_recover", "action": RECOVER,
 		"default": KEY_R, "title": "Recover (+5 seconds)", "player": 0,
 		"description": "Return to the last checkpoint, keeping collected plugs.",
+		"heading": "Cube Trials",
+	},
+	{
+		"key": "controls/cube_trials_camera", "action": CAMERA,
+		"default": KEY_C, "title": "Change camera", "player": 0,
+		"description": "Cycle Side, Chase and Cockpit views. Driving controls stay the same.",
 		"heading": "Cube Trials",
 	},
 ]
@@ -395,12 +409,15 @@ const GALLERY_EXHIBITS: Array[Dictionary] = [
 		"badge": "SPRING",
 		"color": Color("dda368"),
 		"description": (
-			"The part the whole game is about, shown at the length the parked "
-			+ "car's own weight settles it to."
+			"The hidden wheel-well coilover revealed during jumps: a continuous gold "
+			+ "spring around a telescoping chrome shaft and rigid damper housing. "
+			+ "Shown with the same preload as the parked car."
 		),
 		"facts": [
 			"One per wheel; the car carries four",
-			"Travel runs from 6.75 to 14.5 units, parked at 8.44",
+			"Wheels droop slightly in flight to reveal the spring",
+			"Visible in flight; tucked away again as soon as a wheel lands",
+			"Physics travel runs from 6.75 to 14.5 units, parked at 8.44",
 			"Stiffness 160 against 980 of gravity, damped at 12",
 			"Stepped at a fixed 120 Hz, so the ride is frame-rate independent",
 		],

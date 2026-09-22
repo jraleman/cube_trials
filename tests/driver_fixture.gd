@@ -1,6 +1,6 @@
 extends RefCounted
 
-## A feedback driver uses only the same throttle, brake and tilt as a human.
+## A feedback driver uses only the same throttle, brake, tilt and jump as a human.
 
 const State = preload("res://games/cube_trials/trial_state.gd")
 const Course = preload("res://games/cube_trials/course.gd")
@@ -15,7 +15,15 @@ static func controls(state: State) -> Vector3:
 		target_speed = 340.0
 	elif x > 2100.0 and x < 3140.0:
 		target_speed = 620.0
-	elif x > 5030.0:
+	elif x > 5000.0 and x < 6100.0:
+		target_speed = 560.0
+	elif x > 6300.0 and x < 7200.0:
+		target_speed = 320.0
+	elif x > 7230.0 and x < 8810.0:
+		target_speed = 560.0
+	elif x > 8890.0 and x < 9650.0:
+		target_speed = 320.0
+	elif x > Course.FINISH_X - 120.0:
 		target_speed = 65.0
 	var brake := 1.0 if state.velocity.x > target_speed + 25.0 else 0.0
 	var target_angle := 0.0
@@ -34,6 +42,14 @@ static func controls(state: State) -> Vector3:
 	return Vector3(0.0 if brake > 0.0 else 1.0, brake, tilt)
 
 
+static func jump_pressed(state: State) -> bool:
+	for index in range(1, Course.ROADS.size() - 1):
+		var edge: float = Course.ROADS[index][-1].x
+		if state.position.x >= edge - 85.0 and state.position.x < edge + 20.0:
+			return true
+	return false
+
+
 ## Scene checks drive the registered actions, rather than assigning a winning pose.
 static func hold_controls(state: State) -> void:
 	var axes := controls(state)
@@ -42,6 +58,10 @@ static func hold_controls(state: State) -> void:
 	Input.action_press(Options.BRAKE, axes.y)
 	Input.action_press(Options.NOSE_UP, maxf(0.0, -axes.z))
 	Input.action_press(Options.NOSE_DOWN, maxf(0.0, axes.z))
+	if jump_pressed(state):
+		Input.action_press(Options.JUMP)
+	else:
+		Input.action_release(Options.JUMP)
 
 
 ## Never leave synthesized input held for a later test or scene.

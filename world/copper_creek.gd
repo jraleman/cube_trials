@@ -23,7 +23,7 @@ const HILL_STEP := 5.0
 const HILL_ROWS: Array[float] = [-3.3, -8.0, -16.0, -25.0, -34.0, -44.0]
 ## Keep the forest's existing height and center pickups on their collision anchors.
 const PINE_SCALE := 4.19 / 6.03
-const PINE_BATCH_SIZE := 3
+const PINE_BATCH_SIZE := 4
 const PLUG_HEIGHT := 1.0
 const PLUG_SCALE := PLUG_HEIGHT / 0.0955
 const CHECKPOINT_FIELD_MATERIAL := "Cube Flag field"
@@ -53,8 +53,8 @@ var _workshop_light: OmniLight3D
 var _garage_site := Rect2()
 var _garage_pad := Rect2()
 var _garage_floor_y := 0.0
-var _clouds: MeshInstance3D
-var _ripples: MeshInstance3D
+var _clouds: Node3D
+var _ripples: Node3D
 var _dust: MultiMeshInstance3D
 var _last_plugs := -1
 var _last_checkpoint := -1
@@ -135,7 +135,7 @@ func _update_garage(state: State, time: float, reduced: bool, intense: bool) -> 
 		parking_label.text = "SLOW DOWN"
 	parking_label.modulate = color
 	_parking_material.set_shader_parameter("tint", color)
-	var animate := not reduced and intense and not state.finished
+	var animate := not reduced and intense and not state.is_over()
 	_parking_material.set_shader_parameter("pulse",
 		0.9 + sin(time * 1.8) * 0.1 if animate else 1.0)
 	_parking_material.set_shader_parameter("halo_strength", 1.0 if intense else 0.0)
@@ -196,13 +196,24 @@ func _build_terrain() -> void:
 					far_top - Vector3.UP * 18, Color("aa835e"))
 	_mesh("ExactDrivingSurface", road, Art.material(0.98))
 	_mesh("LayeredQuarryRock", earth, Art.material(0.98))
+	var markers := Builder.new()
+	for gap in Course.gap_intervals():
+		for offset: float in [130.0, 90.0, 50.0]:
+			var x := gap.x - offset
+			var a := Art.world_point(Vector2(x, Course.ground_height(x))) + Vector3.UP * 0.025
+			var b := Art.world_point(Vector2(x + 7.0, Course.ground_height(x + 7.0))) \
+				+ Vector3.UP * 0.025
+			markers.quad(a + Vector3(0, 0, 2.5), b + Vector3(0, 0, 2.5),
+				b - Vector3(0, 0, 2.5), a - Vector3(0, 0, 2.5), Color("e6c77d"))
+	_mesh("JumpApproachMarkers", markers, signage_material())
 
 
 func _build_hills() -> void:
 	var hills := Builder.new()
 	var rows := HILL_ROWS
+	var columns := ceili((Course.END_X * Art.WORLD_SCALE + 30.0 - HILL_X_ORIGIN) / HILL_STEP)
 	for row in range(rows.size() - 1):
-		for column in 42:
+		for column in columns:
 			var x := HILL_X_ORIGIN + column * HILL_STEP
 			var a := _hill_point(x, rows[row])
 			var b := _hill_point(x + HILL_STEP, rows[row])
@@ -224,8 +235,11 @@ func _hill_point(x: float, z: float) -> Vector3:
 	var ridge := sin(x * 0.13 + z * 0.037) * 0.48 \
 		+ cos(x * 0.065 - z * 0.10) * 0.38 + sin(x * 0.28 + z * 0.12) * 0.14
 	var height := base + (0.7 + ridge) * minf(distance * 0.16, 7.0)
-	var quarry := exp(-pow((x - 71.5) / 9.0, 4)) * maxf(0, 1.0 - distance / 28.0)
-	height -= quarry * 14.0
+	for gap in Course.gap_intervals():
+		var center := (gap.x + gap.y) * 0.5 * Art.WORLD_SCALE
+		var width := maxf(9.0, (gap.y - gap.x) * 0.5 * Art.WORLD_SCALE + 3.5)
+		var ravine := exp(-pow((x - center) / width, 4)) * maxf(0, 1.0 - distance / 28.0)
+		height -= ravine * 14.0
 	if _garage_pad.has_area():
 		var pad_distance := maxf(
 			maxf(_garage_pad.position.x - x, x - _garage_pad.end.x),
@@ -259,7 +273,8 @@ func _build_scenery() -> void:
 	var foliage := Builder.new()
 	var stones := Builder.new()
 	var details := Builder.new()
-	for index in 78:
+	var count := ceili((Course.END_X * Art.WORLD_SCALE + 16.0) / 2.05)
+	for index in count:
 		var x := -8.0 + index * 2.05
 		var floor_y := Course.ground_height(x / Art.WORLD_SCALE)
 		if not is_finite(floor_y):
@@ -366,24 +381,43 @@ static func sign_labels(title: String, detail: String, base: Vector3) -> Array[L
 
 
 func _build_water_and_clouds() -> void:
-	var water := Builder.new()
-	var level := Art.world_point(Vector2(0, 970)).y
-	water.quad(Vector3(64, level, 8), Vector3(79, level, 8),
-		Vector3(79, level, -24), Vector3(64, level, -24), Color("467d7a"))
-	_mesh("QuarryWater", water, Art.material(0.21, 0.25))
-	var ripples := Builder.new()
-	for index in 8:
-		var center := Vector3(66.0 + (index % 3) * 3.7, level + 0.025, -index * 2.9)
-		var radius := 0.5 + (index % 4) * 0.32
-		ripples.torus(center, radius, radius + 0.017, Color("94b7a6"))
-	_ripples = _mesh("QuietWaterRipples", ripples, Art.material(0.5))
-	var clouds := Builder.new()
-	for index in 8:
+	var pools := Node3D.new()
+	pools.name = "QuarryWater"
+	add_child(pools)
+	_ripples = Node3D.new()
+	_ripples.name = "QuietWaterRipples"
+	add_child(_ripples)
+	_clouds = Node3D.new()
+	_clouds.name = "SlowDriftingClouds"
+	add_child(_clouds)
+	var water_finish := Art.material(0.21, 0.25)
+	var ripple_finish := Art.material(0.5)
+	var cloud_finish := Art.material(1.0)
+	var level := Art.world_point(Vector2(0, Course.FALL_Y - 80.0)).y
+	var gaps := Course.gap_intervals()
+	# Local bounds let each camera cull distant pools and clouds on the longer trail.
+	for gap_index in gaps.size():
+		var gap := gaps[gap_index]
+		var water := Builder.new()
+		var ripples := Builder.new()
+		var left := (gap.x - 200.0) * Art.WORLD_SCALE
+		var right := (gap.y + 200.0) * Art.WORLD_SCALE
+		water.quad(Vector3(left, level, 8), Vector3(right, level, 8),
+			Vector3(right, level, -24), Vector3(left, level, -24), Color("467d7a"))
+		for index in 8:
+			var center := Vector3(lerpf(left, right, 0.2 + (index % 3) * 0.3),
+				level + 0.025, -index * 2.9)
+			var radius := 0.5 + (index % 4) * 0.32
+			ripples.torus(center, radius, radius + 0.017, Color("94b7a6"))
+		_mesh("Pool%d" % gap_index, water, water_finish, pools)
+		_mesh("Ripples%d" % gap_index, ripples, ripple_finish, _ripples)
+	for index in ceili((Course.END_X * Art.WORLD_SCALE + 30.0) / 23.0):
+		var clouds := Builder.new()
 		var at := Vector3(-8 + index * 23, 9 + (index % 3) * 1.2, -41 - (index % 2) * 6)
 		for lobe in 4:
 			clouds.ellipsoid(at + Vector3(lobe * 1.7, sin(lobe * 1.9) * 0.3, 0),
 				Vector3(4.3, 1.25 + (lobe % 2) * 0.4, 2.4), Color("e1e4d2"), 12)
-	_clouds = _mesh("SlowDriftingClouds", clouds, Art.material(1.0))
+		_mesh("Cloud%d" % index, clouds, cloud_finish, _clouds)
 
 
 func _build_pickups() -> void:
@@ -654,7 +688,7 @@ func _build_dust() -> void:
 
 func _update_dust(state: State, time: float, enabled: bool) -> void:
 	var active := enabled and state.contacts > 0 and absf(state.velocity.x) > 80 \
-		and state.crash_wait == 0.0 and not state.finished
+		and state.crash_wait == 0.0 and not state.is_over()
 	_dust.multimesh.visible_instance_count = 14 if active else 0
 	if not active:
 		return
@@ -669,10 +703,15 @@ func _update_dust(state: State, time: float, enabled: bool) -> void:
 		_dust.multimesh.set_instance_color(index, Color(0.75, 0.65, 0.47, (1.0 - age) * 0.28))
 
 
-func _mesh(title: String, parts: Builder, finish: Material) -> MeshInstance3D:
+func _mesh(
+	title: String, parts: Builder, finish: Material, parent: Node3D = null
+) -> MeshInstance3D:
 	var instance := MeshInstance3D.new()
 	instance.name = title
 	instance.mesh = parts.finish()
 	instance.material_override = finish
-	add_child(instance)
+	if parent == null:
+		add_child(instance)
+	else:
+		parent.add_child(instance)
 	return instance

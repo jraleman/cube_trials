@@ -13,6 +13,7 @@ var _camera: Camera3D
 var _image: TextureRect
 var _paint_id := ""
 var _rim_id := ""
+var _damage_stage := 0
 
 
 func _ready() -> void:
@@ -35,6 +36,7 @@ func _ready() -> void:
 	var state := State.new()
 	state.advance(0.5, 0.0, 0.0, 0.0)
 	model.apply_state(state)
+	model.set_damage_stage(_damage_stage)
 	var floor_parts := Builder.new()
 	var center := Vector3(model.position.x, -0.16, 0)
 	floor_parts.cylinder(center, 4.0, 0.32, Color("637664"), Vector3.ZERO, 64)
@@ -65,13 +67,15 @@ func _ready() -> void:
 ## Score art is a parked model, so captures never depend on a decorative animation phase.
 ##
 ## The car on the card is the one that just did the run, in the paint it did it
-## in — a share card showing a stock bronze Cube after 70 Sparks of respray
-## would be advertising a different car than the player drove.
+## in, with its accumulated damage — a pristine bronze Cube after a battered,
+## resprayed run would be advertising a different car than the player drove.
 func configure(data: Dictionary) -> void:
 	_paint_id = str(data.get("paint_id", ""))
 	_rim_id = str(data.get("rim_id", ""))
+	_damage_stage = int(data.get("damage_stage", 0))
 	if is_node_ready():
 		model.set_finish(_paint_id, _rim_id)
+		model.set_damage_stage(_damage_stage)
 		_frame_camera()
 
 

@@ -144,10 +144,46 @@ func ellipsoid(at: Vector3, dimensions: Vector3, color: Color, segments := 12) -
 	_append(primitive, Transform3D(Basis.from_scale(dimensions), at), color)
 
 
+## A continuous, round-wire spring; changing pitch never changes the wire diameter.
+func helix(
+	radius: float, height: float, wire_radius: float, turns: int, color: Color
+) -> void:
+	var steps := turns * 16
+	var sides := 8
+	for step in steps:
+		for side in sides:
+			for corner in [
+				Vector2i(0, 0), Vector2i(1, 1), Vector2i(0, 1),
+				Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1),
+			]:
+				var frame := _helix_frame(radius, height, turns, float(step + corner.x) / steps)
+				var phase := TAU * float(side + corner.y) / sides
+				var normal := frame.basis * Vector3(cos(phase), sin(phase), 0)
+				_vertex(frame.origin + normal * wire_radius, normal, color)
+	for end in 2:
+		var frame := _helix_frame(radius, height, turns, float(end))
+		var normal := frame.basis.z * (-1.0 if end == 0 else 1.0)
+		for side in sides:
+			_vertex(frame.origin, normal, color)
+			for corner: int in ([0, 1] if end == 0 else [1, 0]):
+				var phase := TAU * float(side + corner) / sides
+				var offset := frame.basis * Vector3(cos(phase), sin(phase), 0) * wire_radius
+				_vertex(frame.origin + offset, normal, color)
+
+
+func _helix_frame(radius: float, height: float, turns: int, along: float) -> Transform3D:
+	var angle := TAU * turns * along
+	var radial := Vector3(cos(angle), 0, sin(angle))
+	var tangent := Vector3(-radius * sin(angle), height / (TAU * turns), radius * cos(angle)).normalized()
+	return Transform3D(Basis(radial, tangent.cross(radial), tangent),
+		radial * radius + Vector3.UP * (along - 0.5) * height)
+
+
 ## One surface per finish makes static terrain inexpensive to draw.
-func finish() -> ArrayMesh:
+func finish(indexed := true) -> ArrayMesh:
 	assert(_vertex_count > 0, "A Cube Trials mesh must contain geometry.")
-	_surface.index()
+	if indexed:
+		_surface.index()
 	return _surface.commit()
 
 
