@@ -9,6 +9,7 @@ const View = preload("res://games/cube_trials/course_view.gd")
 const Driver = preload("res://games/cube_trials/tests/driver_fixture.gd")
 const Art = preload("res://games/cube_trials/cube_art.gd")
 const Daylight = preload("res://games/cube_trials/world/daylight.gd")
+const Profiles = preload("res://games/cube_trials/vehicle_profiles.gd")
 const MODES := [View.CameraMode.SIDE, View.CameraMode.CHASE, View.CameraMode.COCKPIT]
 
 var _failures := PackedStringArray()
@@ -17,6 +18,8 @@ var _game: Node
 var _view: View
 var _peak_draws := 0
 var _peak_triangles := 0
+var _vehicle_id := Profiles.CUBE
+var _course := Course.new()
 
 
 func _initialize() -> void:
@@ -31,6 +34,19 @@ func _run() -> void:
 	for argument in OS.get_cmdline_user_args():
 		if argument.begins_with("--cube-capture-dir="):
 			_capture_dir = argument.trim_prefix("--cube-capture-dir=")
+		elif argument.begins_with("--cube-vehicle="):
+			_vehicle_id = argument.trim_prefix("--cube-vehicle=")
+		elif argument.begins_with("--cube-level="):
+			var level_id := argument.trim_prefix("--cube-level=")
+			if not Course.ROUTES.has(level_id):
+				printerr("Unknown camera-test level: " + level_id)
+				quit(1)
+				return
+			_course = Course.new(level_id)
+	if not Profiles.DEFINITIONS.has(_vehicle_id):
+		printerr("Unknown camera-test vehicle: " + _vehicle_id)
+		quit(1)
+		return
 	if not _capture_dir.is_empty():
 		var error := DirAccess.make_dir_recursive_absolute(_capture_dir)
 		if error != OK:
@@ -47,6 +63,13 @@ func _run() -> void:
 	settings.call("set_value", Options.ENGINE_AUDIO_KEY, false)
 	settings.call("set_value", Options.AIR_CONTROL_KEY, 1.0)
 	GameCatalog.restrict_to(Options.GAME_ID)
+	var achievements := get_root().get_node("AchievementManager")
+	achievements.call("unlock", Course.COPPER_COMPLETE)
+	achievements.call("unlock", Course.SUNSET_COMPLETE)
+	var session := get_root().get_node("GameSession")
+	session.call("configure_single_player")
+	session.call("set_level", _course.id)
+	session.call("set_character_for_player", 0, _vehicle_id)
 	get_root().theme = GameCatalog.theme().restyle(ThemeDB.get_project_theme())
 	_game = (load("res://games/cube_trials/gameplay.tscn") as PackedScene).instantiate()
 	get_root().add_child(_game)
@@ -71,7 +94,7 @@ func _run() -> void:
 	_view.set_reduced_motion(false)
 	_view.set_day_night_enabled(false)
 	var next_sample := 450.0
-	for frame in 60 * 60:
+	for frame in 60 * 100:
 		Driver.hold_controls(state)
 		_game.call("_update_round", 1.0 / 60.0, 0.0)
 		if state.position.x >= next_sample and not state.is_over():
@@ -83,24 +106,24 @@ func _run() -> void:
 				await _render()
 				_check_view()
 			next_sample += 150.0
-		for index in Course.gap_intervals().size():
-			var gap := Course.gap_intervals()[index]
+		for index in _course.gap_intervals().size():
+			var gap := _course.gap_intervals()[index]
 			var middle := (gap.x + gap.y) * 0.5
 			if state.position.x >= middle and state.position.x < middle + 15.0:
 				_view.set_camera_mode(View.CameraMode.CHASE)
 				await _render()
 				_check_view()
 				var landing := Art.world_point(
-					Vector2(gap.y + 140.0, Course.ground_height(gap.y + 140.0)))
+					Vector2(gap.y + 140.0, _course.ground_height(gap.y + 140.0)))
 				_expect(not _view.world_camera.is_position_behind(landing)
 					and Rect2(Vector2.ZERO, _view.size).has_point(_view.project_point(landing)),
 					"The chase view must show the landing during every actual gap crossing.")
 				await _capture("camera-gap-%d-Chase" % index)
-		if state.position.x >= Course.FINISH_X - 80.0:
+		if state.position.x >= _course.finish_x - 80.0:
 			Driver.release_controls()
 			break
 	Driver.release_controls()
-	_expect(state.position.x >= Course.FINISH_X - 80.0
+	_expect(state.position.x >= _course.finish_x - 80.0
 		and state.recoveries == 0 and state.lives_left == 5,
 		"The real route must remain drivable while switching cameras repeatedly.")
 	await _test_parking_and_night()
@@ -146,16 +169,16 @@ func _test_cockpit_jumping() -> void:
 		var state: State = _game.get("_state")
 		state.damage_stage = stage
 		Input.action_press(Options.JUMP)
-		for frame in 90:
+		for frame in 120:
 			_game.call("_update_round", 1.0 / 60.0, 0.0)
 			Input.action_release(Options.JUMP)
-			if frame in [0, 6, 54, 62, 70, 80]:
+			if frame in [0, 6, 40, 84, 92, 110]:
 				await _render()
 				_check_view()
 				_expect(_cockpit_forward_clear(),
 					"The %s cockpit must remain clear during takeoff and landing (frame %d)."
 					% [State.DAMAGE_NAMES[stage], frame])
-				if stage in [0, State.MAX_DAMAGE_STAGE] and frame in [0, 62, 70]:
+				if stage in [0, State.MAX_DAMAGE_STAGE] and frame in [0, 84, 92]:
 					await _capture("camera-jump-stage-%d-frame-%d" % [stage, frame])
 		_expect(state.contacts == 2 and state.recoveries == 0 and state.damage_stage == stage,
 			"Every damage stage must retain a clean, controllable jump and landing in Cockpit view.")
@@ -164,7 +187,8 @@ func _test_cockpit_jumping() -> void:
 func _cockpit_forward_clear() -> bool:
 	var eye := _view.world_camera.global_position
 	var ahead := eye - _view.world_camera.global_basis.z * 4.0
-	for part in ["BrownBodywork", "CabinAndDriver", "RubberTrimAndUnderbody"]:
+	var vehicle := _view.world.car.vehicle
+	for part in [vehicle.body_part, vehicle.cabin_part, "RubberTrimAndUnderbody"]:
 		var mesh := _view.world.car.chassis.get_node(part) as MeshInstance3D
 		var start := mesh.to_local(eye)
 		var finish := mesh.to_local(ahead)
@@ -223,11 +247,11 @@ func _check_view() -> void:
 		var bounds := _view.car_screen_bounds()
 		var scale := float(get_root().size.x) / get_root().get_visible_rect().size.x
 		_expect(Rect2(Vector2.ZERO, _view.size).encloses(bounds) and bounds.size.x * scale >= 48.0,
-			"%s must frame the full car at %s, x=%.0f."
-			% [_view.camera_name(), get_root().size, _view.state.position.x])
+			"%s must frame the full car at %s, x=%.0f: %s inside %s."
+			% [_view.camera_name(), get_root().size, _view.state.position.x, bounds, _view.size])
 	else:
 		_expect(_view.world.car.chassis.visible
-			and (_view.world.car.chassis.get_node("CabinAndDriver") as Node3D).visible
+			and (_view.world.car.chassis.get_node(_view.world.car.vehicle.cabin_part) as Node3D).visible
 			and _view.world.car.global_position.distance_to(_view.world_camera.global_position) < 2.0,
 			"First person must use the real cabin at the driver's seat, not hide the car or use a hood camera.")
 	_expect((_view.get_node("WorldImage") as TextureRect).material == null,

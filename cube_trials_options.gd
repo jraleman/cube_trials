@@ -2,9 +2,11 @@ extends RefCounted
 
 ## Preload-safe controls and assists; the shared settings screen owns persistence.
 
-## The shelf quotes the finish module for the two free looks, so a card's
+## The shelf quotes the finish module for every look, so a card's
 ## swatch and the car's actual paint cannot disagree.
 const Finish = preload("res://games/cube_trials/world/cube_finish.gd")
+const Course = preload("res://games/cube_trials/course.gd")
+const Profiles = preload("res://games/cube_trials/vehicle_profiles.gd")
 
 const GAME_ID := "cube_trials"
 const AIR_CONTROL_KEY := "game/cube_trials_air_control"
@@ -15,10 +17,11 @@ const REVERSE := &"cube_trials_reverse"
 const NOSE_UP := &"cube_trials_nose_up"
 const NOSE_DOWN := &"cube_trials_nose_down"
 const JUMP := &"cube_trials_jump"
+const HAZARDS := &"cube_trials_hazards"
 const BRAKE := &"cube_trials_brake"
 const RECOVER := &"cube_trials_recover"
 const CAMERA := &"cube_trials_camera"
-const DRIVE_ACTIONS: Array[StringName] = [NOSE_UP, NOSE_DOWN, REVERSE, THROTTLE, JUMP, BRAKE]
+const DRIVE_ACTIONS: Array[StringName] = [NOSE_UP, NOSE_DOWN, REVERSE, THROTTLE, JUMP, HAZARDS, BRAKE]
 
 const TUNABLES: Array[Dictionary] = [
 	{
@@ -57,19 +60,25 @@ const CONTROL_BINDINGS: Array[Dictionary] = [
 	{
 		"key": "controls/cube_trials_nose_up", "action": NOSE_UP,
 		"default": KEY_A, "title": "Tilt nose up", "player": 0,
-		"description": "Rotate counterclockwise, especially during a jump.",
+		"description": "Hold in the air to backflip. Release to slow the spin, then land on both wheels.",
 		"heading": "Cube Trials",
 	},
 	{
 		"key": "controls/cube_trials_nose_down", "action": NOSE_DOWN,
 		"default": KEY_D, "title": "Tilt nose down", "player": 0,
-		"description": "Rotate clockwise to land on both wheels.",
+		"description": "Hold in the air to frontflip. Release to slow the spin, then land on both wheels.",
 		"heading": "Cube Trials",
 	},
 	{
 		"key": "controls/cube_trials_jump", "action": JUMP,
 		"default": KEY_SPACE, "title": "Jump", "player": 0,
-		"description": "Hop from the trail. Release before jumping again; tilt to land level.",
+		"description": "Jump high from the trail. Release between jumps; tilt for flips and level landings.",
+		"heading": "Cube Trials",
+	},
+	{
+		"key": "controls/cube_trials_hazards", "action": HAZARDS,
+		"default": KEY_F, "title": "Hazard lights", "player": 0,
+		"description": "Toggle hazards. Switch on during a jump for 1.15x aerial points; land to bank them.",
 		"heading": "Cube Trials",
 	},
 	{
@@ -81,7 +90,7 @@ const CONTROL_BINDINGS: Array[Dictionary] = [
 	{
 		"key": "controls/cube_trials_recover", "action": RECOVER,
 		"default": KEY_R, "title": "Recover (+5 seconds)", "player": 0,
-		"description": "Return to the last checkpoint, keeping collected plugs.",
+		"description": "Return to the last checkpoint. Keep plugs and banked points; lose unlanded tricks.",
 		"heading": "Cube Trials",
 	},
 	{
@@ -96,18 +105,8 @@ const CONTROL_BINDINGS: Array[Dictionary] = [
 # The paint shop
 # --------------------------------------------------------------------------
 
-## What a finished run pays, and what that money is called.
-##
-## Sparks are named for the cargo: the five plugs are worth 1,000 each, and
-## finishing adds up to 3,000 more, so a delivered run scores between 5,000 and
-## roughly 7,400 and an abandoned one scores whatever was collected. At this
-## rate a Gold delivery pays about 41 Sparks and the cheapest respray costs
-## most of one run.
-##
-## There is deliberately no ceiling. A payout cap exists to stop an open-ended
-## score being farmed, and this one cannot be: Copper Creek has five plugs, one
-## finish line and a bonus that only shrinks with time, so the round caps
-## itself. Nor is there a win bonus — the trail has no opponent to beat.
+## Cargo, banked aerial points and the shrinking finish bonus share the same Sparks rate.
+## Score and payout stay uncapped; repeated clean tricks can earn more cosmetics.
 const STORE_CURRENCY := {
 	"name": "Spark",
 	"plural": "Sparks",
@@ -118,9 +117,24 @@ const STORE_CURRENCY := {
 }
 
 const PAINT_KIND := "paint"
+const SONATA_PAINT_KIND := "sonata_paint"
+const CRV_PAINT_KIND := "crv_paint"
 const RIM_KIND := "rim"
 const PAINT_SLOT := "cube_body_paint"
+const SONATA_PAINT_SLOT := "cube_sonata_body_paint"
+const CRV_PAINT_SLOT := "cube_crv_body_paint"
 const RIM_SLOT := "cube_wheel_finish"
+const STORE_PRICE_MULTIPLIER := 21
+const PAINT_KINDS := {
+	Profiles.CUBE: PAINT_KIND,
+	Profiles.SONATA: SONATA_PAINT_KIND,
+	Profiles.CRV: CRV_PAINT_KIND,
+}
+const PAINT_SLOTS := {
+	Profiles.CUBE: PAINT_SLOT,
+	Profiles.SONATA: SONATA_PAINT_SLOT,
+	Profiles.CRV: CRV_PAINT_SLOT,
+}
 
 const PAINT_FACTORY := "cube_paint_factory"
 const PAINT_CREEK := "cube_paint_creek"
@@ -131,30 +145,61 @@ const PAINT_MIDNIGHT := "cube_paint_midnight"
 const PAINT_COPPER := "cube_paint_copper"
 const PAINT_GOLD := "cube_paint_gold"
 
+const SONATA_PAINT_FACTORY := "cube_sonata_paint_factory"
+const SONATA_PAINT_LAGOON := "cube_sonata_paint_lagoon"
+const SONATA_PAINT_CORAL := "cube_sonata_paint_coral"
+const SONATA_PAINT_AZURE := "cube_sonata_paint_azure"
+const SONATA_PAINT_BURGUNDY := "cube_sonata_paint_burgundy"
+const SONATA_PAINT_LILAC := "cube_sonata_paint_lilac"
+const SONATA_PAINT_ROSE := "cube_sonata_paint_rose"
+const SONATA_PAINT_CHAMPAGNE := "cube_sonata_paint_champagne"
+
+const CRV_PAINT_FACTORY := "cube_crv_paint_factory"
+const CRV_PAINT_FOREST := "cube_crv_paint_forest"
+const CRV_PAINT_GLACIER := "cube_crv_paint_glacier"
+const CRV_PAINT_CANYON := "cube_crv_paint_canyon"
+const CRV_PAINT_TUNDRA := "cube_crv_paint_tundra"
+const CRV_PAINT_AURORA := "cube_crv_paint_aurora"
+const CRV_PAINT_STORM := "cube_crv_paint_storm"
+const CRV_PAINT_ARCTIC := "cube_crv_paint_arctic"
+
 const RIM_FACTORY := "cube_rim_factory"
 const RIM_GRAPHITE := "cube_rim_graphite"
 const RIM_BRONZE := "cube_rim_bronze"
 const RIM_WHITE := "cube_rim_white"
 const RIM_BLACK := "cube_rim_black"
 
-const PAINT_HEADING := "Body paint"
-const RIM_HEADING := "Wheels"
+const PAINT_HEADING := "Nissan Cube - Body paint"
+const SONATA_PAINT_HEADING := "Hyundai Sonata - Body paint"
+const CRV_PAINT_HEADING := "Honda CR-V - Body paint"
+const RIM_HEADING := "Wheels - All cars"
 
-## Two slots, because the garage does two jobs. They take different kinds
-## rather than the same one, so a wheel finish can never be sprayed onto the
-## bodywork: the only car on Copper Creek wears one of each at a time.
+## Separate kinds prevent buying or equipping one car's paint for another.
+## The Cube keeps the legacy ids, so existing purchases and its chosen coat survive.
 const STORE_SLOTS: Array[Dictionary] = [
 	{
 		"id": PAINT_SLOT,
 		"kind": PAINT_KIND,
-		"title": "Body paint",
-		"description": "What colour the Cube leaves the garage in.",
+		"title": "Nissan Cube",
+		"description": "Body paint owned and equipped only for the Nissan Cube.",
+	},
+	{
+		"id": SONATA_PAINT_SLOT,
+		"kind": SONATA_PAINT_KIND,
+		"title": "Hyundai Sonata",
+		"description": "Body paint owned and equipped only for the Hyundai Sonata.",
+	},
+	{
+		"id": CRV_PAINT_SLOT,
+		"kind": CRV_PAINT_KIND,
+		"title": "Honda CR-V",
+		"description": "Body paint owned and equipped only for the Honda CR-V.",
 	},
 	{
 		"id": RIM_SLOT,
 		"kind": RIM_KIND,
 		"title": "Wheels",
-		"description": "The finish on all four alloys.",
+		"description": "One shared finish for the alloys on every car.",
 	},
 ]
 
@@ -164,7 +209,7 @@ const STORE_SLOTS: Array[Dictionary] = [
 ## the car's mass, grip or suspension: the trial is the same trial in every
 ## colour. That is the point of spending Sparks on paint rather than on parts.
 ##
-## The two factory looks are free, owned from the start and worn by default,
+## Factory looks are free, owned from the start and worn by default,
 ## and they apply no override at all — they are the materials the exporter
 ## wrote, not a copy of them. `world/cube_finish.gd` holds every other colour.
 const STORE_ITEMS: Array[Dictionary] = [
@@ -175,8 +220,8 @@ const STORE_ITEMS: Array[Dictionary] = [
 		"default": true,
 		"title": "Factory Bronze",
 		"description": (
-			"The brown the Cube was delivered in, and the brown it will be "
-			+ "described as forever. Warm metallic with a darker seam coat."
+			"The Nissan Cube's original bronze coat, straight from the factory. "
+			+ "Hot-seat trials always use the driver's blue, red or green instead."
 		),
 		"badge": "STOCK",
 		"color": Finish.FACTORY_COAT,
@@ -185,94 +230,270 @@ const STORE_ITEMS: Array[Dictionary] = [
 	{
 		"id": PAINT_CREEK,
 		"kind": PAINT_KIND,
-		"price": 25,
+		"price": 25 * STORE_PRICE_MULTIPLIER,
 		"title": "Creek Green",
 		"description": (
 			"Mixed to the hillside the trail is cut into. Excellent camouflage "
 			+ "for a car that spends a lot of time off the road."
 		),
 		"badge": "CREEK",
-		"color": Color("4a5f3c"),
+		"color": Finish.PAINTS[PAINT_CREEK]["color"],
 		"heading": PAINT_HEADING,
 	},
 	{
 		"id": PAINT_QUARRY,
 		"kind": PAINT_KIND,
-		"price": 25,
+		"price": 25 * STORE_PRICE_MULTIPLIER,
 		"title": "Quarry Slate",
 		"description": (
 			"The grey of the stone either side of the jump. Sensible, sober, "
 			+ "and the exact colour of the thing you are trying to clear."
 		),
 		"badge": "SLATE",
-		"color": Color("6d757a"),
+		"color": Finish.PAINTS[PAINT_QUARRY]["color"],
 		"heading": PAINT_HEADING,
 	},
 	{
 		"id": PAINT_CERAMIC,
 		"kind": PAINT_KIND,
-		"price": 40,
+		"price": 40 * STORE_PRICE_MULTIPLIER,
 		"title": "Plug Ceramic",
 		"description": (
 			"Off-white, flatter than the rest of the shelf, matched to the "
 			+ "ribbed ceramic on the cargo. A delivery van in spirit."
 		),
 		"badge": "PLUG",
-		"color": Color("ded6c4"),
+		"color": Finish.PAINTS[PAINT_CERAMIC]["color"],
 		"heading": PAINT_HEADING,
 	},
 	{
 		"id": PAINT_SIGNAL,
 		"kind": PAINT_KIND,
-		"price": 40,
+		"price": 40 * STORE_PRICE_MULTIPLIER,
 		"title": "Signal Orange",
 		"description": (
 			"Roadworks orange. Visible from the far side of the quarry, which "
 			+ "is where the car often ends up."
 		),
 		"badge": "SIGNAL",
-		"color": Color("c7601c"),
+		"color": Finish.PAINTS[PAINT_SIGNAL]["color"],
 		"heading": PAINT_HEADING,
 	},
 	{
 		"id": PAINT_MIDNIGHT,
 		"kind": PAINT_KIND,
-		"price": 55,
+		"price": 55 * STORE_PRICE_MULTIPLIER,
 		"title": "Quarry Midnight",
 		"description": (
 			"Deep blue with a wet clear coat, so the late-afternoon sun runs "
 			+ "along the roof rail on every landing."
 		),
 		"badge": "NIGHT",
-		"color": Color("27384d"),
+		"color": Finish.PAINTS[PAINT_MIDNIGHT]["color"],
 		"heading": PAINT_HEADING,
 	},
 	{
 		"id": PAINT_COPPER,
 		"kind": PAINT_KIND,
-		"price": 70,
+		"price": 70 * STORE_PRICE_MULTIPLIER,
 		"title": "Copper Flake",
 		"description": (
 			"The creek's own copper, laid on thick and polished hard. Nearly "
 			+ "bare metal, and it behaves like it under the sun."
 		),
 		"badge": "FLAKE",
-		"color": Color("b0642c"),
+		"color": Finish.PAINTS[PAINT_COPPER]["color"],
 		"heading": PAINT_HEADING,
 	},
 	{
 		"id": PAINT_GOLD,
 		"kind": PAINT_KIND,
-		"price": 120,
+		"price": 120 * STORE_PRICE_MULTIPLIER,
 		"requires_achievement": "cube_trials_gold",
 		"title": "Express Gold",
 		"description": (
-			"Reserved for cars that have done the commute in under "
-			+ "45 seconds. The garage checks before it opens the tin."
+			"Reserved for cars that have earned a Gold delivery. "
+			+ "The garage checks before it opens the tin."
 		),
 		"badge": "GOLD",
-		"color": Color("d9a441"),
+		"color": Finish.PAINTS[PAINT_GOLD]["color"],
 		"heading": PAINT_HEADING,
+	},
+	{
+		"id": SONATA_PAINT_FACTORY,
+		"kind": SONATA_PAINT_KIND,
+		"price": 0,
+		"default": true,
+		"title": "Factory Pearl",
+		"description": "The Sonata's original pearl-white finish. Always available for this car.",
+		"badge": "STOCK",
+		"color": Finish.FACTORY_COATS[Profiles.SONATA],
+		"heading": SONATA_PAINT_HEADING,
+	},
+	{
+		"id": SONATA_PAINT_LAGOON,
+		"kind": SONATA_PAINT_KIND,
+		"price": 25 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.COPPER_COMPLETE,
+		"title": "Lagoon Teal",
+		"description": "A clear coastal teal for the Sonata's long, sculpted panels.",
+		"badge": "LAGOON",
+		"color": Finish.PAINTS[SONATA_PAINT_LAGOON]["color"],
+		"heading": SONATA_PAINT_HEADING,
+	},
+	{
+		"id": SONATA_PAINT_CORAL,
+		"kind": SONATA_PAINT_KIND,
+		"price": 25 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.COPPER_COMPLETE,
+		"title": "Sunset Coral",
+		"description": "Warm coral with a soft sheen, made for the Sonata's beach commute.",
+		"badge": "CORAL",
+		"color": Finish.PAINTS[SONATA_PAINT_CORAL]["color"],
+		"heading": SONATA_PAINT_HEADING,
+	},
+	{
+		"id": SONATA_PAINT_AZURE,
+		"kind": SONATA_PAINT_KIND,
+		"price": 40 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.COPPER_COMPLETE,
+		"title": "Pacific Azure",
+		"description": "Bright metallic blue that follows the Sonata's creases like a wave.",
+		"badge": "AZURE",
+		"color": Finish.PAINTS[SONATA_PAINT_AZURE]["color"],
+		"heading": SONATA_PAINT_HEADING,
+	},
+	{
+		"id": SONATA_PAINT_BURGUNDY,
+		"kind": SONATA_PAINT_KIND,
+		"price": 40 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.COPPER_COMPLETE,
+		"title": "Burgundy Pearl",
+		"description": "A deep wine-red pearl, exclusive to the Sonata's paint shelf.",
+		"badge": "WINE",
+		"color": Finish.PAINTS[SONATA_PAINT_BURGUNDY]["color"],
+		"heading": SONATA_PAINT_HEADING,
+	},
+	{
+		"id": SONATA_PAINT_LILAC,
+		"kind": SONATA_PAINT_KIND,
+		"price": 55 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.COPPER_COMPLETE,
+		"title": "Coastal Lilac",
+		"description": "A light lilac finish for a Sonata that refuses to blend into traffic.",
+		"badge": "LILAC",
+		"color": Finish.PAINTS[SONATA_PAINT_LILAC]["color"],
+		"heading": SONATA_PAINT_HEADING,
+	},
+	{
+		"id": SONATA_PAINT_ROSE,
+		"kind": SONATA_PAINT_KIND,
+		"price": 70 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.COPPER_COMPLETE,
+		"title": "Rose Alloy",
+		"description": "Polished rose-metal paint that catches the light along the Sonata's roof.",
+		"badge": "ROSE",
+		"color": Finish.PAINTS[SONATA_PAINT_ROSE]["color"],
+		"heading": SONATA_PAINT_HEADING,
+	},
+	{
+		"id": SONATA_PAINT_CHAMPAGNE,
+		"kind": SONATA_PAINT_KIND,
+		"price": 120 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.COPPER_COMPLETE,
+		"title": "Champagne Pearl",
+		"description": "The Sonata's premium pale-gold pearl: a quiet finish for a loud landing.",
+		"badge": "PEARL",
+		"color": Finish.PAINTS[SONATA_PAINT_CHAMPAGNE]["color"],
+		"heading": SONATA_PAINT_HEADING,
+	},
+	{
+		"id": CRV_PAINT_FACTORY,
+		"kind": CRV_PAINT_KIND,
+		"price": 0,
+		"default": true,
+		"title": "Factory Deep Blue",
+		"description": "The Honda CR-V's original deep blue. Restores its unmodified factory coat.",
+		"badge": "STOCK",
+		"color": Finish.FACTORY_COATS[Profiles.CRV],
+		"heading": CRV_PAINT_HEADING,
+	},
+	{
+		"id": CRV_PAINT_FOREST,
+		"kind": CRV_PAINT_KIND,
+		"price": 25 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.SUNSET_COMPLETE,
+		"title": "Evergreen",
+		"description": "A dark blue-green finish for the CR-V's woodland detours.",
+		"badge": "FOREST",
+		"color": Finish.PAINTS[CRV_PAINT_FOREST]["color"],
+		"heading": CRV_PAINT_HEADING,
+	},
+	{
+		"id": CRV_PAINT_GLACIER,
+		"kind": CRV_PAINT_KIND,
+		"price": 25 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.SUNSET_COMPLETE,
+		"title": "Glacier Silver",
+		"description": "Cold blue-silver metallic paint, reserved for the CR-V's alpine run.",
+		"badge": "GLACIER",
+		"color": Finish.PAINTS[CRV_PAINT_GLACIER]["color"],
+		"heading": CRV_PAINT_HEADING,
+	},
+	{
+		"id": CRV_PAINT_CANYON,
+		"kind": CRV_PAINT_KIND,
+		"price": 40 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.SUNSET_COMPLETE,
+		"title": "Canyon Red",
+		"description": "A rugged red metallic finish that stands out against alpine snow.",
+		"badge": "CANYON",
+		"color": Finish.PAINTS[CRV_PAINT_CANYON]["color"],
+		"heading": CRV_PAINT_HEADING,
+	},
+	{
+		"id": CRV_PAINT_TUNDRA,
+		"kind": CRV_PAINT_KIND,
+		"price": 40 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.SUNSET_COMPLETE,
+		"title": "Tundra Sand",
+		"description": "A flatter expedition tan, made for the CR-V rather than the city sedan.",
+		"badge": "TUNDRA",
+		"color": Finish.PAINTS[CRV_PAINT_TUNDRA]["color"],
+		"heading": CRV_PAINT_HEADING,
+	},
+	{
+		"id": CRV_PAINT_AURORA,
+		"kind": CRV_PAINT_KIND,
+		"price": 55 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.SUNSET_COMPLETE,
+		"title": "Aurora Violet",
+		"description": "A cool violet metallic coat for the CR-V under the northern sky.",
+		"badge": "AURORA",
+		"color": Finish.PAINTS[CRV_PAINT_AURORA]["color"],
+		"heading": CRV_PAINT_HEADING,
+	},
+	{
+		"id": CRV_PAINT_STORM,
+		"kind": CRV_PAINT_KIND,
+		"price": 70 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.SUNSET_COMPLETE,
+		"title": "Storm Graphite",
+		"description": "A dark graphite clear coat with a restrained metallic edge on the CR-V.",
+		"badge": "STORM",
+		"color": Finish.PAINTS[CRV_PAINT_STORM]["color"],
+		"heading": CRV_PAINT_HEADING,
+	},
+	{
+		"id": CRV_PAINT_ARCTIC,
+		"kind": CRV_PAINT_KIND,
+		"price": 120 * STORE_PRICE_MULTIPLIER,
+		"requires_achievement": Course.SUNSET_COMPLETE,
+		"title": "Arctic Ice",
+		"description": "The CR-V's premium ice-mint metallic finish, bright even in winter shade.",
+		"badge": "ARCTIC",
+		"color": Finish.PAINTS[CRV_PAINT_ARCTIC]["color"],
+		"heading": CRV_PAINT_HEADING,
 	},
 	{
 		"id": RIM_FACTORY,
@@ -281,8 +502,8 @@ const STORE_ITEMS: Array[Dictionary] = [
 		"default": true,
 		"title": "Factory Alloy",
 		"description": (
-			"Five polished spokes and a chrome lip, exactly as exported. The "
-			+ "wheel every other finish on this shelf is sprayed over."
+			"Restore the original alloys on every car. Each model keeps "
+			+ "its own factory wheel geometry and finish."
 		),
 		"badge": "ALLOY",
 		"color": Finish.FACTORY_ALLOY,
@@ -291,46 +512,46 @@ const STORE_ITEMS: Array[Dictionary] = [
 	{
 		"id": RIM_GRAPHITE,
 		"kind": RIM_KIND,
-		"price": 30,
+		"price": 30 * STORE_PRICE_MULTIPLIER,
 		"title": "Graphite",
 		"description": (
 			"Dark grey spokes under a lighter lip. Hides the Copper Creek dust "
 			+ "that the polished set advertises."
 		),
 		"badge": "GRAPH",
-		"color": Color("4d5357"),
+		"color": Finish.RIMS[RIM_GRAPHITE]["face"],
 		"heading": RIM_HEADING,
 	},
 	{
 		"id": RIM_BRONZE,
 		"kind": RIM_KIND,
-		"price": 45,
+		"price": 45 * STORE_PRICE_MULTIPLIER,
 		"title": "Bronze Face",
 		"description": (
 			"Warm bronze spokes with a bright edge. Matches the factory paint "
 			+ "closely enough to look intentional, which it is."
 		),
 		"badge": "BRONZE",
-		"color": Color("9a6a36"),
+		"color": Finish.RIMS[RIM_BRONZE]["face"],
 		"heading": RIM_HEADING,
 	},
 	{
 		"id": RIM_WHITE,
 		"kind": RIM_KIND,
-		"price": 45,
+		"price": 45 * STORE_PRICE_MULTIPLIER,
 		"title": "Trail White",
 		"description": (
 			"Painted rather than polished, so the spokes read flat and the "
 			+ "rim edge is the only thing still catching the light."
 		),
 		"badge": "WHITE",
-		"color": Color("e4e6e0"),
+		"color": Finish.RIMS[RIM_WHITE]["face"],
 		"heading": RIM_HEADING,
 	},
 	{
 		"id": RIM_BLACK,
 		"kind": RIM_KIND,
-		"price": 60,
+		"price": 60 * STORE_PRICE_MULTIPLIER,
 		"requires_achievement": "cube_trials_clean",
 		"title": "Gloss Black",
 		"description": (
@@ -338,7 +559,7 @@ const STORE_ITEMS: Array[Dictionary] = [
 			+ "It shows every mark, which is rather the point."
 		),
 		"badge": "GLOSS",
-		"color": Color("1e2226"),
+		"color": Finish.RIMS[RIM_BLACK]["face"],
 		"heading": RIM_HEADING,
 	},
 ]
@@ -350,6 +571,8 @@ const STORE_ITEMS: Array[Dictionary] = [
 const EXHIBIT_CUBE := "cube_car"
 const EXHIBIT_WHEEL := "cube_wheel"
 const EXHIBIT_SUSPENSION := "cube_suspension"
+const EXHIBIT_SONATA := "cube_sonata"
+const EXHIBIT_CRV := "cube_crv"
 const EXHIBIT_PLUG := "cube_plug"
 const EXHIBIT_CHECKPOINT := "cube_checkpoint"
 const EXHIBIT_SIGN := "cube_sign"
@@ -357,13 +580,14 @@ const EXHIBIT_PINE := "cube_pine"
 const EXHIBIT_FENCE := "cube_fence"
 const EXHIBIT_GARAGE := "cube_garage"
 
-## The cast of Copper Creek, on plinths.
+## The cast of Copper Creek and two reference-car studies, on plinths.
 ##
 ## A trials course is driven past at speed and read from one fixed side, so
-## almost nothing here is ever seen from more than one angle in play. Every
-## exhibit is therefore the model the game itself builds — the imported car
+## almost nothing here is ever seen from more than one angle in play. Course
+## exhibits are therefore the models the game itself builds — the imported car
 ## settled on its own suspension solver, the scenery straight out of
-## `copper_creek.gd` — rather than a nicer one made for a display case.
+## `copper_creek.gd` — rather than nicer ones made for a display case. The two
+## additional cars show their saved GLBs without changing the playable Cube.
 ##
 ## The facts are each exhibit's label card. They exist so a model is never
 ## carried by the picture alone, which is the same reason the signs, the plugs
@@ -380,9 +604,9 @@ const GALLERY_EXHIBITS: Array[Dictionary] = [
 			+ "settled here by the same solver that drives it."
 		),
 		"facts": [
-			"Original Blender geometry: 44,398 triangles in 16 mesh nodes",
+			"Original Blender geometry: 44,266 triangles in 16 mesh nodes",
 			"A 2.53 m wheelbase and about 23 cm of clearance at rest",
-			"Hollow cabin, driver, mirrors, door seams and wraparound glass",
+			"Hollow cabin, driver, mirrors, door seams and bounded rear glass",
 			"The rear lamps are a live material, not a painted-on glow",
 		],
 	},
@@ -423,6 +647,34 @@ const GALLERY_EXHIBITS: Array[Dictionary] = [
 		],
 	},
 	{
+		"id": EXHIBIT_SONATA,
+		"requires_achievement": Course.COPPER_COMPLETE,
+		"title": "Hyundai Sonata",
+		"heading": "Reference cars",
+		"badge": "SEDAN",
+		"color": Color("e7ebf0"),
+		"description": "A white sedan study with swept lights, curved glazing and split-spoke wheels.",
+		"facts": [
+			"42,726 triangles in 16 mesh nodes",
+			"2.84 m wheelbase; four wheel pivots",
+			"Playable in solo and hot-seat trials",
+		],
+	},
+	{
+		"id": EXHIBIT_CRV,
+		"requires_achievement": Course.SUNSET_COMPLETE,
+		"title": "Honda CR-V",
+		"heading": "Reference cars",
+		"badge": "CR-V",
+		"color": Color("07387f"),
+		"description": "A blue crossover study with roof rails, black cladding and tall rear lamps.",
+		"facts": [
+			"43,696 triangles in 16 mesh nodes",
+			"2.62 m wheelbase; four wheel pivots",
+			"Playable in solo and hot-seat trials",
+		],
+	},
+	{
 		"id": EXHIBIT_PLUG,
 		"title": "Numbered Spark Plug",
 		"heading": "The trail",
@@ -450,7 +702,7 @@ const GALLERY_EXHIBITS: Array[Dictionary] = [
 			+ "plug has been collected, so it can never strand one."
 		),
 		"facts": [
-			"Two stand on the trail; the start line is the third",
+			"Four flags on Sunset Ridge; seven on Copper Creek and Alpine Pass",
 			"Imported checker cloth, wooden pole, gold finial and stone footing",
 			"Gold until the checkpoint saves, then teal - and it says so too",
 		],

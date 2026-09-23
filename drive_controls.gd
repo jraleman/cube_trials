@@ -5,19 +5,21 @@ extends GridContainer
 signal recovery_requested
 signal camera_requested
 signal jump_requested
+signal hazards_requested
 
 const Options = preload("res://games/cube_trials/cube_trials_options.gd")
 const ACTIONS: Array[StringName] = [
 	Options.NOSE_UP, Options.NOSE_DOWN, Options.REVERSE,
-	Options.THROTTLE, Options.JUMP, Options.BRAKE, Options.RECOVER,
+	Options.THROTTLE, Options.JUMP, Options.HAZARDS, Options.BRAKE, Options.RECOVER,
 ]
-const TITLES := ["NOSE UP", "NOSE DOWN", "REVERSE", "THROTTLE", "JUMP", "BRAKE", "RECOVER +5s"]
+const TITLES := ["NOSE UP", "NOSE DOWN", "REVERSE", "THROTTLE", "JUMP", "HAZARDS", "BRAKE", "RECOVER +5s"]
 const ICONS: Array[Texture2D] = [
 	preload("res://games/cube_trials/assets/icons/tilt_up.svg"),
 	preload("res://games/cube_trials/assets/icons/tilt_down.svg"),
 	preload("res://games/cube_trials/assets/icons/reverse.svg"),
 	preload("res://games/cube_trials/assets/icons/throttle.svg"),
 	preload("res://games/cube_trials/assets/icons/jump.svg"),
+	preload("res://games/cube_trials/assets/icons/hazards.svg"),
 	preload("res://games/cube_trials/assets/icons/brake.svg"),
 	preload("res://assets/images/icon_replay.svg"),
 ]
@@ -29,6 +31,7 @@ var _enabled := true
 var _key_labels := {}
 var _compact := false
 var _camera_button: Button
+var _hazards_on := false
 
 
 func _ready() -> void:
@@ -60,6 +63,14 @@ func set_key_labels(labels: Dictionary) -> void:
 	_refresh_labels()
 
 
+func set_hazards(on: bool) -> void:
+	if _hazards_on == on:
+		return
+	_hazards_on = on
+	_refresh_labels()
+	_sync_buttons()
+
+
 ## Share touch ownership and emulation filtering with the pedals, even in the HUD.
 func attach_camera_button(button: Button) -> void:
 	_camera_button = button
@@ -73,19 +84,26 @@ func _refresh_labels() -> void:
 		var key: String = _key_labels.get(action, "")
 		buttons[action].text = "" if _compact else key
 		buttons[action].tooltip_text = "%s (%s)" % [TITLES[index], key]
+		if action == Options.HAZARDS:
+			buttons[action].tooltip_text = "Hazards %s (%s / gamepad X). Switch on in mid-air for 1.15x." \
+				% ["ON" if _hazards_on else "OFF", key]
+			buttons[action].self_modulate = Color("ffd17b") if _hazards_on else Color.WHITE
 		buttons[action].accessibility_name = buttons[action].tooltip_text
 
 
 ## Preserve touch target size on high-DPI portrait windows.
 func fit_width(width: float, readability: float) -> void:
-	columns = ACTIONS.size() if width >= 536.0 * readability else 4
-	if width < 302.0 * readability:
-		columns = 3
 	_compact = width < 1000.0 * readability
-	add_theme_constant_override("h_separation", roundi(10 * readability))
+	var button_width := 66.0 if _compact else 68.0
+	var gap := 4.0 if _compact else 10.0
+	var single_row := (ACTIONS.size() * button_width + (ACTIONS.size() - 1) * gap) * readability
+	columns = ACTIONS.size() if width >= single_row else 4
+	if width < (4.0 * button_width + 3.0 * gap) * readability:
+		columns = 3
+	add_theme_constant_override("h_separation", roundi(gap * readability))
 	add_theme_constant_override("v_separation", roundi(8 * readability))
 	for button in buttons.values():
-		button.custom_minimum_size = Vector2(68, 70) * readability
+		button.custom_minimum_size = Vector2(button_width, 70) * readability
 		button.add_theme_font_size_override("font_size", roundi(20 * readability))
 		button.add_theme_constant_override("icon_max_width", roundi(30 * readability))
 	_refresh_labels()
@@ -145,6 +163,8 @@ func _input(event: InputEvent) -> void:
 				camera_requested.emit()
 			elif action == Options.JUMP:
 				jump_requested.emit()
+			elif action == Options.HAZARDS:
+				hazards_requested.emit()
 		elif _touches.has(event.index):
 			_touches.erase(event.index)
 		else:
@@ -171,6 +191,8 @@ func _mouse_down(action: StringName) -> void:
 		_mouse_action = action
 		if action == Options.JUMP:
 			jump_requested.emit()
+		elif action == Options.HAZARDS:
+			hazards_requested.emit()
 
 
 func _mouse_up() -> void:
@@ -190,6 +212,7 @@ func _request_camera() -> void:
 
 func _sync_buttons() -> void:
 	for action in buttons:
-		buttons[action].set_pressed_no_signal(strength(action) > 0.0)
+		buttons[action].set_pressed_no_signal(strength(action) > 0.0
+			or (action == Options.HAZARDS and _hazards_on))
 	if _camera_button != null:
 		_camera_button.set_pressed_no_signal(strength(Options.CAMERA) > 0.0)

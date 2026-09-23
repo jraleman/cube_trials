@@ -18,6 +18,7 @@ var time_label: Label
 var feedback_label: Label
 var bar: GridContainer
 var camera_button: Button
+var driver_label: Label
 var _feedback: CenterContainer
 var _actions: HBoxContainer
 var _action_buttons: Array[Button] = []
@@ -43,10 +44,18 @@ func _ready() -> void:
 	lives_label = _metric("Lives", LIFE, Color("ff8b82"))
 	points_label = _metric("Points", POINTS, Color("ffd17b"))
 	plugs_label = _metric("Plugs", PLUG, Art.CREAM)
-	var space := Control.new()
-	space.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	space.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	bar.add_child(space)
+	var driver_panel := PanelContainer.new()
+	driver_panel.name = "Driver"
+	driver_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	driver_panel.add_theme_stylebox_override("panel", _style)
+	bar.add_child(driver_panel)
+	driver_label = Label.new()
+	driver_label.name = "DriverIdentity"
+	driver_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	driver_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	driver_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	driver_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	driver_panel.add_child(driver_label)
 	time_label = _metric("Time", TIMER, Art.CREAM)
 	_actions = HBoxContainer.new()
 	_actions.name = "ViewActions"
@@ -119,6 +128,7 @@ func fit_width(width: float, readability: float) -> void:
 	for label in [lives_label, points_label, plugs_label, time_label]:
 		label.add_theme_font_size_override("font_size", roundi(27 * readability))
 	feedback_label.add_theme_font_size_override("font_size", roundi(22 * readability))
+	driver_label.add_theme_font_size_override("font_size", roundi(22 * readability))
 	for button in _action_buttons:
 		button.custom_minimum_size = Vector2.ONE * 68 * readability
 		button.add_theme_constant_override("icon_max_width", roundi(28 * readability))
@@ -151,11 +161,33 @@ func sync(state: State, feedback: String) -> void:
 	_describe(lives_label, "%d of %d lives. Crashes cost one life." % [
 		state.lives_left, State.STARTING_LIVES,
 	])
-	_describe(points_label, "%d points" % state.score())
+	_describe(points_label, (
+		"%d points: %d from %d landed flips, %d from airtime, speed and angle, "
+		+ "%d hazard bonus. %d pending at %.2fx; land on both wheels to bank."
+	) % [
+		state.score(), state.flip_points, state.landed_flips, state.jump_points,
+		state.hazard_points, state.pending_trick_points(), state.jump_multiplier(),
+	])
 	_describe(plugs_label, "%d of 5 spark plugs collected" % state.plug_count())
 	_describe(time_label, "Time including recovery penalties: %s" % time)
 	feedback_label.text = feedback
-	_feedback.visible = not feedback.is_empty()
+	if state.pending_trick_points() > 0:
+		var trick := "%d FLIP%s" % [state.pending_flips, "" if state.pending_flips == 1 else "S"] \
+			if state.pending_flips > 0 else "JUMP"
+		feedback_label.text = "%s / LAND +%d" % [trick, state.pending_trick_points()]
+		if state.hazard_bonus:
+			feedback_label.text += "\nHAZARDS x%.2f" % state.jump_multiplier()
+	elif state.hazard_bonus:
+		feedback_label.text = "HAZARDS x%.2f / LAND TO BANK" % state.jump_multiplier()
+	feedback_label.accessibility_name = feedback_label.text
+	_feedback.visible = not feedback_label.text.is_empty()
+
+
+func set_driver(name_text: String, color: Color) -> void:
+	driver_label.text = name_text
+	driver_label.accessibility_name = name_text
+	(driver_label.get_parent() as Control).tooltip_text = name_text
+	driver_label.add_theme_color_override("font_color", color)
 
 
 func _metric(title: String, texture: Texture2D, color: Color) -> Label:

@@ -2,14 +2,19 @@
 
 Development-only imagery used while authoring the original meshes in
 `tools\blender\`. The separate, portable GLB exports live in `assets\models\`;
-the car and all four props are used by the game and gallery. Shared runtime
-factories fit the props to the course and add its live indicators without
-reading these images. Nothing in this reference folder is loaded at runtime,
-shipped in a build, or imported by the engine.
+all three cars and all four props are used by the game and gallery. The
+Sonata and CR-V are selectable for solo and local hot-seat trials and are
+showcased in their factory appearance under **Gallery > Reference cars**.
+Shared runtime factories fit the props to
+the course and add its live indicators without reading these images. Nothing
+in this reference folder is loaded at runtime, shipped in a build, or imported
+by the engine.
 
 | File | Subject | Authored model |
 | --- | --- | --- |
-| `car.png` | Multi-view 2009-generation Nissan Cube: proportions, glasshouse, wheel placement and body radii. | `nissan_cube.blend` |
+| `car.png` | Bronze Nissan Cube: rounded body, bounded rear hatch glass, body-colored rear pillars and broad five-spoke wheels. | `nissan_cube.blend` |
+| `car2.png` | White Hyundai Sonata sedan: sloping cabin, swept lights, broad grille and connected rear light bar. | `hyundai_sonata.blend` |
+| `car3.png` | Blue Honda CR-V crossover: taller cabin, wheel-arch cladding, roof rails and vertical rear lamps. | `honda_crv.blend` |
 | `tree.png` | Faceted conifer with layered green fronds and a flared trunk. | `pine_tree.blend` |
 | `spark-plug.png` | Ribbed ceramic spark plug with a hex shell, thread profile and hooked electrode; maker marks omitted. | `spark_plug.blend` |
 | `check-flag.png` | Yellow checker swallowtail, wooden pole, clamps, rock footing and grass. | `checkpoint_flag.blend` |
@@ -21,6 +26,13 @@ pixels: the generators never open, trace, sample or pack these sheets. The flag
 checker and workshop lettering are mesh geometry, not image textures. The
 root README documents generation, export, scale and the five inspection
 cameras in each Blender file.
+
+All three car studies have refined silhouettes, window outlines, wheel faces
+and reference-specific front/rear details. The Sonata and CR-V use curved body
+skins and hollow lofted cabins; the Cube keeps its existing wheel placement,
+runtime names and factory finishes. Matching front and rear renders accompany
+each saved source. These are original unbranded visual reconstructions, not
+factory CAD models or photogrammetric scans.
 
 ## Why it lives here and not in `assets/`
 
@@ -60,8 +72,11 @@ cannot accommodate a third-party image, delete `car.png` and substitute an
 orthographic reference you hold the rights to — the geometry code does not
 depend on the file existing.
 
-The four additional sheets are user-supplied modeling references; their
+The six additional sheets are user-supplied modeling references; their
 presence does not establish a redistribution licence. Keep them
 development-only as well. The spark plug's printed maker name and logo are
 not reproduced. The workshop uses original, generic Creek signage, and none
 of the new Blender or GLB files embeds reference imagery.
+The Sonata and CR-V studies likewise omit all manufacturer emblems,
+model badges and wordmarks. Hyundai, Sonata, Honda and CR-V belong to their
+respective trademark owners; these studies imply no affiliation or endorsement.

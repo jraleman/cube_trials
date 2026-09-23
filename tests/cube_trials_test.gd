@@ -6,8 +6,10 @@ const State = preload("res://games/cube_trials/trial_state.gd")
 const Course = preload("res://games/cube_trials/course.gd")
 const Driver = preload("res://games/cube_trials/tests/driver_fixture.gd")
 const Tuning = preload("res://games/cube_trials/vehicle_tuning.gd")
+const Profiles = preload("res://games/cube_trials/vehicle_profiles.gd")
 
 var _failures := PackedStringArray()
+var _course := Course.new()
 
 
 func _initialize() -> void:
@@ -28,6 +30,12 @@ func _run() -> void:
 	_test_landing_damage()
 	_test_damage_frame_rates()
 	_test_clean_flip()
+	_test_flip_scoring()
+	_test_flip_attempt_rules()
+	_test_flip_finish()
+	_test_dynamic_jump_scoring()
+	_test_hazard_scoring()
+	_test_hazard_frame_rates()
 	_test_finish_rules()
 	_test_complete_course()
 	_test_assisted_recovery_runs()
@@ -43,13 +51,13 @@ func _test_suspension_and_controls() -> void:
 	var state := State.new()
 	for frame in 600:
 		state.advance(1.0 / 60.0, 0.0, 0.0, 0.0)
-	var clearance := Course.ground_height(state.position.x) - state.position.y
+	var clearance := _course.ground_height(state.position.x) - state.position.y
 	_expect(state.contacts == 2 and absf(clearance - Tuning.RIDE_HEIGHT) < 0.75
 		and clearance < 40.0 and absf(state.velocity.y) < 0.05,
 		"The short springs must settle at the stock ride height without sinking or bouncing.")
 	for index in 2:
 		var wheel_bottom := state.wheel_centers[index].y + State.WHEEL_RADIUS
-		_expect(absf(wheel_bottom - Course.ground_height(state.wheel_centers[index].x)) < 0.05,
+		_expect(absf(wheel_bottom - _course.ground_height(state.wheel_centers[index].x)) < 0.05,
 			"The smaller tires must remain on the collision surface at rest.")
 	_expect(state.elapsed == 0.0 and state.recoveries == 0,
 		"The clock waits for the driver and idle suspension cannot crash.")
@@ -72,7 +80,7 @@ func _test_suspension_and_controls() -> void:
 	state.advance(0.2, 0.0, 0.0, -1.0)
 	_expect(state.angle < -0.02 and state.contacts == 0,
 		"Airborne tilt must rotate the chassis without imaginary ground contact.")
-	_expect(is_inf(Course.ground_height(2870.0)),
+	_expect(is_inf(_course.ground_height(2870.0)),
 		"The quarry is a real gap rather than an invisible collision bridge.")
 
 
@@ -104,7 +112,7 @@ func _test_jump_controls() -> void:
 	var floor_y := state.position.y
 	state.advance(State.STEP, 0.0, 0.0, 0.0, true)
 	_expect(state.started and state.elapsed > 0.0 and state.contacts == 0 and state.is_airborne()
-		and state.velocity.y < -490.0 and _jump_events(state) == 1,
+		and state.velocity.y < -670.0 and _jump_events(state) == 1,
 		"A jump press alone must start the clock and launch the actual chassis.")
 	var highest := state.position.y
 	var repeated := 0
@@ -112,8 +120,8 @@ func _test_jump_controls() -> void:
 		state.advance(1.0 / 60.0, 0.0, 0.0, 0.0, true)
 		highest = minf(highest, state.position.y)
 		repeated += _jump_events(state)
-	_expect(floor_y - highest > 110.0 and floor_y - highest < 145.0,
-		"The standing jump must clear a meaningful, bounded 110-145 simulation-unit height.")
+	_expect(floor_y - highest > 225.0 and floor_y - highest < 240.0,
+		"The higher standing jump must clear 225-240 units, nearly twice the old 127-unit hop.")
 	_expect(repeated == 0 and state.contacts == 2 and not state.is_airborne()
 		and state.damage_stage == 0
 		and state.lives_left == State.STARTING_LIVES and state.recoveries == 0,
@@ -174,7 +182,7 @@ func _test_jump_buffer_and_coyote() -> void:
 	for delay in [State.STEP, State.JUMP_COYOTE_SECONDS + State.STEP * 2.0]:
 		var late := State.new()
 		late.advance(0.5, 0.0, 0.0, 0.0)
-		var gap := Course.gap_intervals()[0]
+		var gap := _course.gap_intervals()[0]
 		late.position.x = (gap.x + gap.y) * 0.5
 		late.advance(delay, 0.0, 0.0, 0.0)
 		late.advance(State.STEP, 0.0, 0.0, 0.0, true)
@@ -206,21 +214,31 @@ func _test_jump_frame_rates() -> void:
 
 
 func _test_extended_course() -> void:
-	_expect(Course.FINISH_X - Course.START_X >= (5150.0 - Course.START_X) * 2.0,
-		"The active start-to-finish route must be at least twice its original length.")
-	var gaps := Course.gap_intervals()
-	_expect(gaps.size() == 4 and Course.CHECKPOINT_X.size() == 5,
-		"The extended trail must contain four real gaps and four recoverable checkpoint flags.")
+	_expect(Course.FINISH_X - Course.START_X >= (10120.0 - Course.START_X) * 1.5,
+		"The mountain extension must add at least 50% to the previous start-to-finish route.")
+	var gaps := _course.gap_intervals()
+	_expect(gaps.size() == 6 and Course.CHECKPOINT_X.size() == 8,
+		"The extended trail must contain six real gaps and seven recoverable checkpoint flags.")
+	var highest := INF
+	var lowest := -INF
+	for road: Array in Course.ROADS:
+		for point: Vector2 in road:
+			highest = minf(highest, point.y)
+			lowest = maxf(lowest, point.y)
+	_expect(lowest - highest >= 900.0,
+		"The actual driving terrain must span at least 900 vertical units, up from 240.")
+	_expect(Course.PLUG_X[-1] > 10120.0 and Course.END_X > Course.FINISH_X + Course.FINISH_WIDTH,
+		"The final plug and usable garage must require driving the new mountain extension.")
 	for index in gaps.size():
 		var gap := gaps[index]
-		_expect(is_inf(Course.ground_height((gap.x + gap.y) * 0.5)),
+		_expect(is_inf(_course.ground_height((gap.x + gap.y) * 0.5)),
 			"Every rendered ravine must also be an open physics gap.")
 		if index == 0:
 			continue
 		_expect(gap.y - gap.x >= 330.0, "The new ravines must be wider than the original quarry.")
 		var state := State.new()
 		state.position = Vector2(gap.x - 100.0,
-			Course.ground_height(gap.x - 100.0) - Tuning.RIDE_HEIGHT)
+			_course.ground_height(gap.x - 100.0) - Tuning.RIDE_HEIGHT)
 		state.velocity.x = 500.0
 		for frame in 120:
 			state.advance(1.0 / 60.0, 1.0, 0.0, 0.0)
@@ -229,24 +247,24 @@ func _test_extended_course() -> void:
 		_expect(state.recoveries > 0,
 			"New gap %d must require a deliberate jump, not just holding throttle." % index)
 	for index in Course.CHECKPOINT_X.size():
-		var spawn := Course.spawn_position(index)
+		var spawn := _course.spawn_position(index)
 		for offset: float in [-73.0, 0.0, 73.0]:
-			_expect(is_equal_approx(Course.ground_height(spawn.x + offset),
+			_expect(is_equal_approx(_course.ground_height(spawn.x + offset),
 				spawn.y + Tuning.RIDE_HEIGHT), "Checkpoint tires must respawn on a level pull-off.")
 	for index in Course.PLUG_X.size():
-		_expect(Course.plug_position(index).is_finite()
+		_expect(_course.plug_position(index).is_finite()
 			and Course.PLUG_X[index] < Course.FINISH_X,
 			"All five required plugs must remain reachable before the new finish.")
 
 
 func _test_pickups_and_checkpoints() -> void:
 	var state := State.new()
-	state.position = Course.plug_position(0)
+	state.position = _course.plug_position(0)
 	state.advance(State.STEP, 0.0, 0.0, 0.0)
 	state.advance(State.STEP, 0.0, 0.0, 0.0)
 	_expect(state.plug_count() == 1 and state.score() == 1000,
 		"A plug can only be collected and scored once.")
-	state.position = Course.spawn_position(1)
+	state.position = _course.spawn_position(1)
 	state.velocity = Vector2.ZERO
 	state.advance(State.STEP, 0.0, 0.0, 0.0)
 	_expect(state.checkpoint == 0, "A checkpoint cannot strand an earlier missing plug.")
@@ -255,9 +273,9 @@ func _test_pickups_and_checkpoints() -> void:
 	_expect(state.checkpoint == 1, "A grounded car with earlier plugs saves the checkpoint.")
 	state.recover()
 	_expect(state.checkpoint == 1 and state.plug_count() == 2
-		and state.position == Course.spawn_position(1),
+		and state.position == _course.spawn_position(1),
 		"Recovery retains pickups and uses the last safe checkpoint.")
-	state.position = Course.spawn_position(2)
+	state.position = _course.spawn_position(2)
 	state.advance(State.STEP, 0.0, 0.0, 0.0)
 	_expect(state.checkpoint == 1, "The far-side checkpoint requires the pre-jump plug.")
 	for checkpoint in range(1, Course.CHECKPOINT_X.size()):
@@ -267,7 +285,7 @@ func _test_pickups_and_checkpoints() -> void:
 			var gated := State.new()
 			gated.collected.fill(true)
 			gated.collected[missing] = false
-			gated.position = Course.spawn_position(checkpoint)
+			gated.position = _course.spawn_position(checkpoint)
 			gated.advance(State.STEP, 0.0, 0.0, 0.0)
 			_expect(gated.checkpoint == 0,
 				"Every checkpoint must reject any earlier missing plug, including on the extension.")
@@ -275,7 +293,7 @@ func _test_pickups_and_checkpoints() -> void:
 			gated.advance(State.STEP, 0.0, 0.0, 0.0)
 			gated.recover()
 			_expect(gated.checkpoint == checkpoint
-				and gated.position == Course.spawn_position(checkpoint),
+				and gated.position == _course.spawn_position(checkpoint),
 				"Every unlocked checkpoint must recover to its own safe pull-off.")
 
 
@@ -381,7 +399,7 @@ func _airborne_damage_state() -> State:
 
 
 func _land(state: State, speed: float, horizontal := 0.0, spin := 0.0, jump := false) -> void:
-	state.position = Course.spawn_position(0)
+	state.position = _course.spawn_position(0)
 	state.velocity = Vector2(horizontal, speed)
 	state.angle = 0.0
 	state.angular_velocity = spin
@@ -414,7 +432,7 @@ func _test_landing_damage() -> void:
 	_expect(hard.damage_stage == 1,
 		"An unsettled bounce must not rearm damage even if the second impact is harder.")
 	hard.advance(1.0, 0.0, 0.0, 0.0)
-	hard.position.y -= 260.0
+	hard.position.y -= 400.0
 	hard.velocity = Vector2.ZERO
 	hard.advance(4.0, 0.0, 0.0, 0.0)
 	_expect(hard.damage_stage == 2,
@@ -424,7 +442,7 @@ func _test_landing_damage() -> void:
 	_expect(sliding.damage_stage == 0,
 		"Landing severity must measure speed into the surface, not horizontal speed.")
 	var spinning := _airborne_damage_state()
-	_land(spinning, 500.0, 0.0, 5.0)
+	_land(spinning, State.HARD_LANDING_SPEED - 200.0, 0.0, 5.0)
 	_expect(spinning.damage_stage == 1,
 		"The incoming wheel contact speed must include chassis rotation.")
 	var recovered := _airborne_damage_state()
@@ -449,7 +467,7 @@ func _test_landing_damage() -> void:
 
 
 func _test_damage_frame_rates() -> void:
-	for height in [25.0, 160.0, 260.0]:
+	for height in [25.0, 240.0, 400.0]:
 		var reference: State
 		for fps in [30, 60, 144]:
 			var state := State.new()
@@ -457,7 +475,7 @@ func _test_damage_frame_rates() -> void:
 			state.started = true
 			for frame in fps * 4:
 				state.advance(1.0 / fps, 0.0, 0.0, 0.0)
-			_expect(state.damage_stage == (1 if height == 260.0 else 0)
+			_expect(state.damage_stage == (1 if height == 400.0 else 0)
 				and state.recoveries == 0,
 				"A %.0f-unit drop at %d FPS must distinguish ordinary and hard landings."
 				% [height, fps])
@@ -486,6 +504,318 @@ func _test_clean_flip() -> void:
 		"An upright gentle touchdown after a flip must remain pristine.")
 
 
+func _test_flip_scoring() -> void:
+	for id in [Profiles.CUBE, Profiles.SONATA, Profiles.CRV]:
+		for direction: float in [-1.0, 1.0]:
+			var reference: State
+			for fps: int in [30, 60, 144]:
+				var state := State.new(id)
+				state.advance(0.5, 0.0, 0.0, 0.0)
+				var flip_events := 0
+				var bank_events := 0
+				var unbanked := false
+				for frame in fps * 3:
+					var tilt := direction if frame >= fps / 6 and frame < fps else 0.0
+					state.advance(1.0 / fps, 0.0, 0.0, tilt, frame == 0)
+					if state.pending_flips > 0:
+						unbanked = true
+						_expect(state.score() == 0 and state.landed_flips == 0,
+							"A completed airborne flip must not pay before a stable landing.")
+					for event in state.take_events():
+						if event["kind"] == "flip":
+							flip_events += 1
+							_expect(event["text"].begins_with(
+								"Frontflip" if direction > 0.0 else "Backflip"),
+								"Trick feedback must identify the actual spin direction.")
+						elif event["kind"] == "trick":
+							bank_events += 1
+				_expect(unbanked and flip_events == 1 and bank_events == 1
+					and state.landed_flips == 1 and state.flip_points == 500
+					and state.jump_points > 0 and state.score() == 500 + state.jump_points
+					and state.landed_jumps == 1 and state.hazard_points == 0
+					and state.pending_flips == 0 and state.contacts == 2
+					and state.recoveries == 0 and state.damage_stage == 0,
+					"%s must bank a 500-point %s plus dynamic aerial points at %d FPS." % [
+						id, "backflip" if direction < 0.0 else "frontflip", fps,
+					])
+				if reference != null:
+					_expect(state.position.distance_to(reference.position) < 0.001
+						and absf(state.angle - reference.angle) < 0.00001
+						and state.score() == reference.score(),
+						"Identical jump/tilt/release inputs must produce identical tricks at all frame rates.")
+				reference = state
+			var banked := reference.score()
+			reference.recover()
+			reference.advance(1.0, 0.0, 0.0, 0.0)
+			_expect(reference.flip_points == 500 and reference.landed_flips == 1
+				and reference.score() == banked,
+				"Banked tricks survive recovery and cannot be awarded again at the checkpoint.")
+	_expect(State.new().flip_points == 0 and State.new().pending_flips == 0,
+		"Replay and a new hot-seat run must start without another driver's tricks.")
+
+
+func _rotate_in_air(state: State, turns: float, direction := 1.0) -> void:
+	state.position = Vector2(180, -10000)
+	state.velocity = Vector2.ZERO
+	state.angle = 0.0
+	state.angular_velocity = 0.0
+	var rotation := 0.0
+	for step in 120 * 5:
+		var before := state.angle
+		state.advance(State.STEP, 0.0, 0.0, direction)
+		rotation += angle_difference(before, state.angle) * direction
+		if rotation >= TAU * turns:
+			break
+	_expect(rotation >= TAU * turns and state.contacts == 0,
+		"The trick rules fixture must perform actual full-speed airborne rotation.")
+
+
+func _test_flip_attempt_rules() -> void:
+	var state := State.new()
+	_rotate_in_air(state, 2.0)
+	_expect(state.pending_flips == 2 and state.pending_flip_points() == 1000 and state.score() == 0,
+		"Multiple complete rotations in one flight must accumulate unbanked points.")
+	_land(state, 100.0)
+	_expect(state.pending_flips == 2 and state.flip_points == 0,
+		"A one-tick touchdown cannot bank a trick before the car is stable.")
+	state.advance(0.5, 0.0, 0.0, 0.0)
+	var banked := state.score()
+	_expect(state.landed_flips == 2 and state.flip_points == 1000
+		and banked == 1000 + state.jump_points and state.jump_points > 0 and state.pending_flips == 0,
+		"A stable two-wheel landing banks every completed flip exactly once.")
+	_rotate_in_air(state, 1.0, -1.0)
+	state.recover()
+	_expect(state.pending_flips == 0 and state.landed_flips == 2 and state.score() == banked,
+		"Manual recovery discards only the current unlanded trick, not banked points.")
+	_rotate_in_air(state, 1.0)
+	state.position = Vector2(400, 632)
+	state.angle = PI
+	state.advance(State.STEP, 0.0, 0.0, 0.0)
+	_expect(state.crash_wait > 0.0 and state.pending_flips == 0 and state.score() == banked,
+		"A roof strike after a full flip must lose the attempt without erasing earlier points.")
+	state.advance(State.CRASH_DELAY + 0.5, 0.0, 0.0, 0.0)
+	_rotate_in_air(state, 1.0)
+	state.lives_left = 1
+	state.position.y = Course.FALL_Y + 1.0
+	state.advance(State.CRASH_DELAY + State.STEP * 2.0, 0.0, 0.0, 0.0)
+	_expect(state.failed and state.pending_flips == 0 and state.score() == banked,
+		"Falling on the final life loses the pending trick and keeps only banked points.")
+	var partial := State.new()
+	for attempt in 3:
+		_rotate_in_air(partial, 0.55)
+		_land(partial, 100.0)
+		partial.advance(0.5, 0.0, 0.0, 0.0)
+	_expect(partial.jump_points > 0 and partial.flip_points == 0
+		and partial.pending_flips == 0 and partial.landed_flips == 0,
+		"Partial rotations can earn aerial style but cannot be stitched into a 500-point flip.")
+	var rocking := State.new()
+	rocking.position = Vector2(180, -10000)
+	rocking.angle = PI - 0.05
+	var crossed_wrap := false
+	var travel := 0.0
+	for step in 120 * 6:
+		var before := rocking.angle
+		rocking.advance(State.STEP, 0.0, 0.0, 1.0 if (step / 24) % 2 == 0 else -1.0)
+		travel += absf(angle_difference(before, rocking.angle))
+		crossed_wrap = crossed_wrap or absf(before - rocking.angle) > PI
+	_expect(crossed_wrap and travel > TAU and rocking.pending_flips == 0 and rocking.score() == 0,
+		"Crossing the angle wrap or rocking through 360 cumulative degrees is not a full revolution.")
+	var grounded := State.new()
+	for step in 120 * 3:
+		grounded.advance(State.STEP, 0.0, 0.0, 1.0 if (step / 24) % 2 == 0 else -1.0)
+	_expect(grounded.score() == 0 and grounded.pending_flips == 0,
+		"Grounded rocking and roof rolls must never award flip points.")
+
+
+func _test_flip_finish() -> void:
+	var state := State.new()
+	_rotate_in_air(state, 1.0)
+	state.collected.fill(true)
+	state.position = Vector2(Course.FINISH_X + 100.0,
+		_course.ground_height(Course.FINISH_X + 100.0) - state.vehicle.ride_height)
+	state.velocity = Vector2.ZERO
+	state.angle = 0.0
+	state.angular_velocity = 0.0
+	state.advance(State.STEP, 0.0, 0.0, 0.0)
+	_expect(not state.finished and state.pending_flips == 1,
+		"The garage must wait for a pending trick to land safely before freezing the run.")
+	state.advance(0.5, 0.0, 0.0, 0.0)
+	_expect(state.finished and state.landed_flips == 1 and state.pending_flips == 0
+		and state.score() == 5500 + state.jump_points
+			+ maxi(0, 3000 - ceili(state.adjusted_time() * 30.0)),
+		"A flip landed inside the garage must be included in the final score.")
+	var score := state.score()
+	state.advance(1.0, 0.0, 0.0, 1.0, true)
+	state.recover()
+	_expect(state.score() == score and state.landed_flips == 1,
+		"Finished trick scores must freeze with the rest of the run.")
+
+
+func _air_sample(speed := 0.0, pitch := 0.0, seconds := 0.5) -> State:
+	var state := State.new()
+	state.started = true
+	state.position = Vector2(4000, -10000)
+	state.velocity.x = speed
+	state.angle = pitch
+	state.advance(seconds, 0.0, 0.0, 0.0)
+	return state
+
+
+func _test_dynamic_jump_scoring() -> void:
+	var level := _air_sample()
+	var fast := _air_sample(600.0)
+	var tilted := _air_sample(0.0, PI * 0.5)
+	var inverted := _air_sample(0.0, PI)
+	_expect(level.pending_jump_points() == 40 and level.score() == 0,
+		"Half a second of level flight must earn exactly 40 unbanked airtime points.")
+	_expect(tilted.pending_jump_points() == 65 and inverted.pending_jump_points() == 90,
+		"A 90-degree or inverted half-second flight must add exactly 25 or 50 angle points.")
+	_expect(fast.pending_jump_points() > level.pending_jump_points()
+		and fast.pending_jump_points() < 100,
+		"Real horizontal velocity must increase airborne points without exceeding its 120/second cap.")
+	_expect(_air_sample(200.0).pending_jump_points() == _air_sample(-200.0).pending_jump_points()
+		and tilted.pending_jump_points() == _air_sample(0.0, -PI * 0.5).pending_jump_points(),
+		"Forward/reverse travel and either tilt direction must score symmetrically.")
+	_expect(_air_sample(0.0, 0.0, 1.0).pending_jump_points() == 80
+		and _air_sample(0.0, 0.0, State.MIN_SCORING_AIR_TIME - State.STEP).pending_jump_points() == 0
+		and _air_sample(0.0, 0.0, State.MIN_SCORING_AIR_TIME).pending_jump_points() == 16,
+		"Airtime must scale with duration; the exact 0.20-second threshold rejects suspension chatter.")
+	var expected := fast.pending_trick_points()
+	_land(fast, 100.0)
+	_expect(fast.score() == 0 and fast.pending_trick_points() == expected,
+		"Motion points, like flips, must wait for a stable landing rather than a single wheel strike.")
+	fast.advance(0.5, 0.0, 0.0, 0.0)
+	_expect(fast.score() == expected and fast.jump_points == expected and fast.landed_jumps == 1
+		and fast.pending_trick_points() == 0,
+		"A no-flip jump must bank its dynamic points exactly once.")
+	fast.advance(2.0, 0.0, 0.0, 0.0)
+	_expect(fast.score() == expected and fast.landed_jumps == 1,
+		"Ground contact must not repeatedly bank the same jump.")
+	var grounded := State.new()
+	for step in 60:
+		grounded.advance(State.STEP, 1.0, 0.0, 0.0)
+	_expect(grounded.velocity.x > 100.0 and grounded.score() == 0
+		and grounded.pending_trick_points() == 0,
+		"Fast grounded driving must not generate aerial points.")
+	var parked := _air_sample()
+	parked.collected.fill(true)
+	parked.position = Vector2(Course.FINISH_X + 100.0,
+		_course.ground_height(Course.FINISH_X + 100.0) - parked.vehicle.ride_height)
+	parked.velocity = Vector2.ZERO
+	parked.advance(State.STEP, 0.0, 0.0, 0.0)
+	_expect(not parked.finished and parked.pending_trick_points() == 40,
+		"The garage must wait for an ordinary jump's points, not only for flips.")
+	parked.advance(0.5, 0.0, 0.0, 0.0)
+	_expect(parked.finished and parked.jump_points == 40
+		and parked.score() == 5040 + maxi(0, 3000 - ceili(parked.adjusted_time() * 30.0)),
+		"A garage landing must include aerial points and the unchanged delivery/time bonus.")
+
+
+func _test_hazard_scoring() -> void:
+	var scrape := _air_sample(0.0, 0.0, State.MIN_SCORING_AIR_TIME - State.STEP)
+	scrape.position = Vector2(200, _course.ground_height(200) - 10.0)
+	scrape.velocity = Vector2.ZERO
+	scrape.angle = 0.6
+	scrape.advance(State.STEP, 0.0, 0.0, 0.0)
+	scrape.toggle_hazards()
+	_expect(scrape.contacts == 0 and scrape.crash_wait == 0.0 and scrape.hazards_on
+		and not scrape.hazard_bonus and scrape.pending_trick_points() == 0,
+		"Resting on the underbody is not mid-air, even when neither wheel has contact.")
+	scrape.position.y -= 100.0
+	scrape.advance(State.STEP, 0.0, 0.0, 0.0)
+	_expect(scrape.pending_trick_points() == 0,
+		"A belly scrape must break the minimum uninterrupted airtime needed to score.")
+	var state := State.new()
+	state.toggle_hazards()
+	state.advance(0.3, 0.0, 0.0, 0.0)
+	_expect(state.hazards_on and state.hazard_time > 0.0 and not state.started
+		and state.elapsed == 0.0 and not state.hazard_bonus and state.score() == 0,
+		"Parked hazards must blink without starting the race clock or earning points.")
+	state.advance(0.3, 0.0, 0.0, 0.0, true)
+	_expect(state.is_airborne() and not state.hazard_bonus and state.jump_multiplier() == 1.0,
+		"Leaving hazards on before takeoff must not pre-arm a bonus.")
+	state.toggle_hazards()
+	state.toggle_hazards()
+	state.collected[0] = true
+	var base := state.pending_jump_points()
+	var boosted := roundi(base * 1.15)
+	_expect(state.hazard_bonus and state.jump_multiplier() == 1.15
+		and state.pending_trick_points() == boosted and state.score() == 1000,
+		"Switching hazards on mid-air must multiply only the pending jump by exactly 1.15.")
+	for attempt in 4:
+		state.toggle_hazards()
+		state.toggle_hazards()
+	_expect(state.pending_trick_points() == boosted,
+		"Toggle spam must never stack multipliers or award extra points.")
+	state.toggle_hazards()
+	_expect(state.hazard_bonus and state.pending_trick_points() == boosted,
+		"Switching the lamps off must not erase a mid-air activation already earned in this jump.")
+	state.toggle_hazards()
+	_land(state, 100.0)
+	state.advance(0.5, 0.0, 0.0, 0.0)
+	_expect(state.score() == 1000 + boosted and state.jump_points == base
+		and state.hazard_points == boosted - base and state.hazards_on
+		and not state.hazard_bonus and state.pending_trick_points() == 0,
+		"Landing must bank the exact bonus, reset eligibility, and leave the normal hazard toggle on.")
+	state.advance(0.0, 0.0, 0.0, 0.0, false)
+	state.advance(0.3, 0.0, 0.0, 0.0, true)
+	_expect(state.pending_jump_points() > 0 and not state.hazard_bonus,
+		"The next jump needs a new in-air off/on activation, not a permanently enabled multiplier.")
+	state.toggle_hazards()
+	state.toggle_hazards()
+	state.recover()
+	_expect(not state.hazard_bonus and state.pending_trick_points() == 0
+		and state.score() == 1000 + boosted and state.hazards_on,
+		"Recovery must discard the current aerial bonus without losing banked points or toggling lamps.")
+	state.advance(0.5, 0.0, 0.0, 0.0)
+	state.advance(0.3, 0.0, 0.0, 0.0, true)
+	state.toggle_hazards()
+	state.toggle_hazards()
+	state.position.y = Course.FALL_Y + 1.0
+	state.advance(State.STEP, 0.0, 0.0, 0.0)
+	_expect(state.crash_wait > 0.0 and not state.hazard_bonus and state.pending_trick_points() == 0
+		and state.score() == 1000 + boosted,
+		"A crash must discard dynamic points and their multiplier before any respawn or result.")
+	state.toggle_hazards()
+	_expect(state.hazards_on, "Inputs during recovery must not change the hazard toggle.")
+	state.advance(State.CRASH_DELAY + 0.5, 0.0, 0.0, 0.0)
+	state.finished = true
+	var phase := state.hazard_time
+	var final_score := state.score()
+	state.toggle_hazards()
+	state.advance(2.0, 0.0, 0.0, 0.0)
+	_expect(state.hazards_on and state.hazard_time == phase and state.score() == final_score,
+		"Completed runs must freeze hazards and aerial scoring.")
+	var fresh := State.new()
+	_expect(not fresh.hazards_on and not fresh.hazard_bonus and fresh.hazard_points == 0
+		and fresh.jump_points == 0 and fresh.landed_jumps == 0,
+		"A fresh run must not inherit any lamps, multiplier or aerial points.")
+
+
+func _test_hazard_frame_rates() -> void:
+	for id in [Profiles.CUBE, Profiles.SONATA, Profiles.CRV]:
+		var reference: State
+		for fps: int in [30, 60, 144]:
+			var state := State.new(id)
+			state.advance(0.5, 0.0, 0.0, 0.0)
+			for frame in fps * 3:
+				if frame == fps / 2:
+					state.toggle_hazards()
+				var tilt := 1.0 if frame >= fps / 6 and frame < fps else 0.0
+				state.advance(1.0 / fps, 0.0, 0.0, tilt, frame == 0)
+			_expect(state.landed_flips == 1 and state.landed_jumps == 1
+				and state.score() == roundi((500 + state.jump_points) * 1.15)
+				and state.hazard_points > 0 and state.recoveries == 0,
+				"%s at %d FPS must apply the hazard bonus to both motion and flip points." % [id, fps])
+			if reference != null:
+				_expect(state.score() == reference.score() and state.jump_points == reference.jump_points
+					and state.hazard_points == reference.hazard_points
+					and is_equal_approx(state.hazard_time, reference.hazard_time)
+					and state.position.distance_to(reference.position) < 0.001,
+					"Scoring, hazard timing and physical landings must be identical at 30/60/144 FPS.")
+			reference = state
+
+
 func _test_finish_rules() -> void:
 	var state := State.new()
 	state.position = Vector2(Course.FINISH_X + 100, 610 - Tuning.RIDE_HEIGHT)
@@ -496,7 +826,7 @@ func _test_finish_rules() -> void:
 	state.advance(State.STEP, 0.0, 0.0, 0.0)
 	_expect(not state.finished, "Flying through the garage is not parking.")
 	state.velocity = Vector2.ZERO
-	state.elapsed = 40.0
+	state.elapsed = State.GOLD_SECONDS - 5.0
 	state.recoveries = 2
 	state.advance(State.STEP, 0.0, 0.0, 0.0)
 	_expect(state.finished and state.medal() == "SILVER",
@@ -509,7 +839,7 @@ func _test_finish_rules() -> void:
 	_expect(state.position == completed_position and state.adjusted_time() == completed_time
 		and state.damage_stage == completed_damage,
 		"A finished run must freeze its score, physics and clock.")
-	_expect(state.score() == 5000 + maxi(0, 3000 - ceili(completed_time * 40.0)),
+	_expect(state.score() == 5000 + maxi(0, 3000 - ceili(completed_time * 30.0)),
 		"Results must use the advertised five-plug plus adjusted-time bonus.")
 	_expect(State.time_text(65.239) == "01:05.23", "Clock formatting must preserve hundredths.")
 
@@ -531,8 +861,8 @@ func _test_complete_course() -> void:
 			break
 	_expect(state.finished and state.plug_count() == 5
 		and state.checkpoint == Course.CHECKPOINT_X.size() - 1
-		and jumps >= 3 and state.recoveries == 0,
-		"A clean input-only drive must jump all four gaps, collect five plugs and park.\n"
+		and jumps >= 5 and state.recoveries == 0,
+		"A clean input-only drive must jump all six gaps, collect five plugs and park.\n"
 		+ "\n".join(trace) + "\nFinal position: %s" % state.position)
 	_expect(state.damage_stage == 0,
 		"The ordinary input-only route, including the quarry jump, must not count as hard landings.")

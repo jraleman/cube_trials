@@ -1,6 +1,7 @@
 """Export the saved authoring model, not its generator, as a portable Godot GLB.
 
 Run Blender with --background nissan_cube.blend --python this_file.py.
+Append -- --render-previews to refresh both three-quarter studio images.
 The source .blend is never saved or modified on disk.
 """
 
@@ -20,8 +21,8 @@ OUTPUT = Path(__file__).resolve().parents[2] / "assets" / "models" / "nissan_cub
 MAX_TRIANGLES = 45000
 MAX_SURFACES = 48
 REDUCTION = {
-    "BrownBodywork": 0.38,
-    "RubberTrimAndUnderbody": 0.30,
+    "BrownBodywork": 0.35,
+    "RubberTrimAndUnderbody": 0.22,
     "ChromeHandlesGrilleAndBadges": 0.28,
     "CabinAndDriver": 0.33,
     "HeadlightsAndIndicators": 0.38,
@@ -189,6 +190,11 @@ def main():
     if scene is None or root is None or root.name not in scene.objects:
         raise ValueError("The saved file does not contain the expected Nissan Cube assembly.")
     bpy.context.window.scene = scene
+    if "--render-previews" in sys.argv:
+        for frame, suffix in ((1, "preview"), (2, "rear")):
+            scene.frame_set(frame)
+            scene.render.filepath = str(source_path.with_name(f"nissan_cube_{suffix}.png"))
+            bpy.ops.render.render(write_still=True)
     source_objects = list(root.children_recursive)
     pivots = {obj.name.split(" | ")[-1].split()[0]: obj
               for obj in source_objects if obj.type == "EMPTY" and obj.name.endswith("wheel pivot")}

@@ -32,8 +32,10 @@ func _run() -> void:
 	GameCatalog.select(Options.GAME_ID)
 	var manifest := GameCatalog.current()
 	_expect(manifest != null and not manifest.uses_shell_round_rules
-		and not manifest.supports_multiplayer and not manifest.supports_cpu_opponent,
-		"Cube Trials must declare its own ending and solo-only controls.")
+		and manifest.supports_multiplayer and not manifest.supports_cpu_opponent
+		and manifest.max_local_players == 3 and manifest.local_multiplayer_turns,
+		"Cube Trials must declare its own ending and up to three human hot-seat drivers.")
+	get_root().get_node("GameSession").call("configure_single_player")
 	_expect(ResourceLoader.exists(manifest.intro_scene_path)
 		and ResourceLoader.exists(manifest.tutorial_poster_path)
 		and ResourceLoader.exists(manifest.share_art_scene_path),
@@ -61,7 +63,9 @@ func _run() -> void:
 	await _test_camera_controls(settings)
 	_test_multitouch_and_pause()
 	await _test_jump_inputs(settings)
+	await _test_hazard_inputs(settings)
 	await _test_gamepad_jump_and_brake()
+	await _test_flip_inputs()
 	_test_brake_inputs()
 	_test_day_night_settings(settings)
 	_test_live_accessibility(settings)
@@ -72,7 +76,10 @@ func _run() -> void:
 	var replay: State = _game.get("_state")
 	_expect(not replay.finished and replay.plug_count() == 0 and replay.checkpoint == 0
 		and replay.elapsed == 0.0 and replay.recoveries == 0 and replay.damage_stage == 0
-		and replay.lives_left == State.STARTING_LIVES and not replay.failed,
+		and replay.lives_left == State.STARTING_LIVES and not replay.failed
+		and replay.landed_flips == 0 and replay.flip_points == 0 and replay.pending_flips == 0
+		and replay.jump_points == 0 and replay.hazard_points == 0
+		and not replay.hazards_on and not replay.hazard_bonus,
 		"Replay must reset time, pickups, checkpoint, penalties, damage and lives together.")
 	var controls: Node = _game.get("_controls")
 	_expect(not (controls.get("buttons")[Options.THROTTLE] as Button).disabled,
@@ -334,7 +341,8 @@ func _test_jump_inputs(settings: Node) -> void:
 	_touch(11, tilt.get_global_rect().get_center(), false)
 	for frame in 150:
 		_game.call("_update_round", 1.0 / 60.0, 0.0)
-	_expect(state.contacts == 2 and state.longest_air < 1.3 and state.recoveries == 0,
+	_expect(state.contacts == 2 and state.longest_air > 1.3 and state.longest_air < 1.6
+		and state.recoveries == 0,
 		"Touch/mouse emulation must trigger only one clean hop.")
 	_game.call("_on_play_again_pressed")
 	state = _game.get("_state")
@@ -367,6 +375,100 @@ func _test_jump_inputs(settings: Node) -> void:
 	_game.call("_on_play_again_pressed")
 
 
+func _test_hazard_inputs(settings: Node) -> void:
+	_game.call("_on_play_again_pressed")
+	await process_frame
+	var state: State = _game.get("_state")
+	var hud := _game.get("_trial_hud") as TrialHUD
+	var controls: Node = _game.get("_controls")
+	var button: Button = controls.get("buttons")[Options.HAZARDS]
+	_key(KEY_F, true)
+	await process_frame
+	_game.call("_update_round", 0.3, 0.0)
+	_expect(state.hazards_on and not state.started and not state.hazard_bonus
+		and button.accessibility_name.contains("ON") and button.icon != null,
+		"F must toggle visible, accessible hazards on the ground without starting the clock.")
+	var repeated := InputEventKey.new()
+	repeated.keycode = KEY_F
+	repeated.physical_keycode = KEY_F
+	repeated.pressed = true
+	repeated.echo = true
+	_game.call("_handle_gameplay_input", repeated)
+	_expect(state.hazards_on, "Keyboard auto-repeat must not keep toggling hazards.")
+	_key(KEY_F, false)
+	await process_frame
+	_game.call("_queue_jump")
+	_game.call("_update_round", 0.3, 0.0)
+	_expect(state.is_airborne() and not state.hazard_bonus,
+		"A jump cannot inherit a bonus from hazards enabled on the ground.")
+	_key(KEY_F, true)
+	_key(KEY_F, false)
+	await process_frame
+	_key(KEY_F, true)
+	_key(KEY_F, false)
+	await process_frame
+	_game.call("_update_round", State.STEP, 0.0)
+	_expect(state.hazards_on and state.hazard_bonus and hud.feedback_label.text.contains("x1.15")
+		and hud.feedback_label.text.contains(str(state.pending_trick_points())),
+		"An in-air off/on F press must show the actual unbanked 1.15x jump value.")
+	var phase := state.hazard_time
+	var points := state.pending_trick_points()
+	paused = true
+	_game.call("_toggle_hazards")
+	_game.call("_update_round", 2.0, 0.0)
+	_expect(state.hazards_on and state.hazard_time == phase and state.pending_trick_points() == points,
+		"Pause must freeze the blink and pending score, and ignore hazard input.")
+	paused = false
+	for frame in 150:
+		_game.call("_update_round", 1.0 / 60.0, 0.0)
+	_expect(state.hazard_points > 0 and state.landed_jumps == 1 and not state.hazard_bonus
+		and hud.points_label.text == str(state.score()) and state.hazards_on,
+		"An ordinary jump must bank its hazard bonus through the real gameplay loop.")
+	var payload: Dictionary = _game.call("_share_payload")
+	_expect(payload["jump_points"] == state.jump_points and payload["hazard_points"] == state.hazard_points
+		and payload["players"][0]["hazard_points"] == state.hazard_points
+		and payload["landed_jumps"] == 1,
+		"Share totals and driver details must retain exactly the banked dynamic score.")
+	var key := "controls/cube_trials_hazards"
+	settings.call("set_binding_key", key, KEY_H, Options.GAME_ID)
+	_expect(button.tooltip_text.contains("(H /"), "The hazard button must reflect live rebinding.")
+	_key(KEY_F, true)
+	_key(KEY_F, false)
+	await process_frame
+	_expect(state.hazards_on, "The old key must stop toggling after rebinding hazards.")
+	_key(KEY_H, true)
+	_key(KEY_H, false)
+	await process_frame
+	_expect(not state.hazards_on, "The rebound key must control the same hazard toggle.")
+	settings.call("set_binding_key", key, KEY_F, Options.GAME_ID)
+	_game.call("_on_play_again_pressed")
+	state = _game.get("_state")
+	await process_frame
+	_game.call("_queue_jump")
+	_game.call("_update_round", 0.3, 0.0)
+	var throttle: Button = controls.get("buttons")[Options.THROTTLE]
+	_touch(31, throttle.get_global_rect().get_center(), true)
+	_touch(32, button.get_global_rect().get_center(), true)
+	_touch(32, button.get_global_rect().get_center(), false)
+	_expect(state.hazards_on and state.hazard_bonus
+		and float(controls.call("strength", Options.THROTTLE)) == 1.0,
+		"Touch must toggle and release hazards without stealing a held throttle finger.")
+	_touch(31, throttle.get_global_rect().get_center(), false)
+	var mouse := InputEventMouseButton.new()
+	mouse.button_index = MOUSE_BUTTON_LEFT
+	mouse.position = button.get_global_rect().get_center()
+	mouse.pressed = true
+	get_root().push_input(mouse, true)
+	mouse.pressed = false
+	get_root().push_input(mouse, true)
+	_expect(not state.hazards_on, "A full mouse click between ticks must toggle hazards exactly once.")
+	_game.call("_on_play_again_pressed")
+	state = _game.get("_state")
+	_expect(not state.hazards_on and not state.hazard_bonus and state.hazard_points == 0
+		and button.accessibility_name.contains("OFF"),
+		"Replay must reset both the simulated hazard toggle and its visible button.")
+
+
 func _test_gamepad_jump_and_brake() -> void:
 	var device := 15
 	while device >= 0 and Input.get_connected_joypads().has(device):
@@ -391,6 +493,13 @@ func _test_gamepad_jump_and_brake() -> void:
 	_game.call("_update_round", State.STEP, 0.0)
 	_expect(state.velocity.y < -490.0 and not view.braking,
 		"The assigned gamepad's A button must jump instead of retaining the old brake action.")
+	_pad(device, JOY_BUTTON_X, true)
+	await process_frame
+	_game.call("_update_round", State.STEP, 0.0)
+	_expect(state.hazards_on and state.hazard_bonus and bool(_game.call("_inputs_held")),
+		"The assigned gamepad's X button must toggle hazards and participate in handoff release gating.")
+	_pad(device, JOY_BUTTON_X, false)
+	await process_frame
 	for frame in 180:
 		_game.call("_update_round", 1.0 / 60.0, 0.0)
 	_expect(state.contacts == 2 and state.recoveries == 0,
@@ -413,8 +522,78 @@ func _test_gamepad_jump_and_brake() -> void:
 	_game.call("_handle_gameplay_input", foreign)
 	_game.call("_update_round", 0.1, 0.0)
 	_expect(state.contacts == 2, "An unassigned gamepad must not queue a jump.")
+	foreign.button_index = JOY_BUTTON_X
+	_game.call("_handle_gameplay_input", foreign)
+	_expect(not state.hazards_on, "An unassigned gamepad must not toggle hazards.")
 	_game.set("test_controller", -1)
 	_game.call("_on_play_again_pressed")
+
+
+func _test_flip_inputs() -> void:
+	for touch: bool in [false, true]:
+		Driver.release_controls()
+		_game.call("_on_play_again_pressed")
+		await process_frame
+		_game.call("_update_round", 0.5, 0.0)
+		var state: State = _game.get("_state")
+		var hud := _game.get("_trial_hud") as TrialHUD
+		var controls: Node = _game.get("_controls")
+		var action := Options.NOSE_UP if touch else Options.NOSE_DOWN
+		var tilt: Button = controls.get("buttons")[action]
+		var jump: Button = controls.get("buttons")[Options.JUMP]
+		var saw_pending := false
+		for frame in 180:
+			if frame in [0, 1]:
+				if touch:
+					_touch(20, jump.get_global_rect().get_center(), frame == 0)
+				elif frame == 0:
+					Input.action_press(Options.JUMP)
+				else:
+					Input.action_release(Options.JUMP)
+			if frame in [10, 60]:
+				if touch:
+					_touch(21, tilt.get_global_rect().get_center(), frame == 10)
+				elif frame == 10:
+					Input.action_press(action)
+				else:
+					Input.action_release(action)
+			_game.call("_update_round", 1.0 / 60.0, 0.0)
+			if state.pending_flips > 0 and not saw_pending:
+				saw_pending = true
+				_expect(hud.points_label.text == "0" and hud.feedback_label.text.contains(
+					"LAND +%d" % state.pending_trick_points()),
+					"The live HUD must distinguish a pending trick from banked score.")
+				var position := state.position
+				var clock := state.elapsed
+				paused = true
+				_game.call("_update_round", 2.0, 0.0)
+				paused = false
+				_expect(state.position == position and state.elapsed == clock
+					and state.pending_flips == 1 and state.score() == 0,
+					"Pause must preserve an unlanded trick without moving, banking or losing it.")
+		Driver.release_controls()
+		var banked := state.score()
+		_expect(saw_pending and state.landed_flips == 1 and state.flip_points == 500
+			and state.jump_points > 0 and banked == 500 + state.jump_points
+			and hud.points_label.text == str(banked) and state.recoveries == 0
+			and hud.points_label.accessibility_name.contains("500 from 1 landed flips"),
+			"Touch and keyboard tilt must visibly bank the flip plus its dynamic aerial points.")
+		var stats: Dictionary = _game.call("_player_stats", 0)
+		var payload: Dictionary = _game.call("_share_payload")
+		_expect(stats["score"] == banked and stats["streak"] == 1
+			and payload["landed_flips"] == 1 and payload["flip_points"] == 500
+			and payload["players"][0]["flip_points"] == 500
+			and payload["jump_points"] == state.jump_points
+			and payload["players"][0]["jump_points"] == state.jump_points,
+			"Driver statistics and share data must include the same banked trick points as the HUD.")
+		_game.call("_recover")
+		_game.call("_update_round", 0.5, 0.0)
+		_expect(state.landed_flips == 1 and hud.points_label.text == str(banked),
+			"A real recovery must retain the banked trick in the live HUD.")
+		_game.call("_on_play_again_pressed")
+		var replay: State = _game.get("_state")
+		_expect(replay.landed_flips == 0 and replay.pending_flips == 0 and hud.points_label.text == "0",
+			"Replay must clear banked points and pending trick feedback together.")
 
 
 func _test_day_night_settings(settings: Node) -> void:

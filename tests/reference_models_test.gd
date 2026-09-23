@@ -1,6 +1,6 @@
 extends SceneTree
 
-## Saved Blender prop exports must remain portable, grounded and meter-scaled.
+## Saved Blender exports must remain portable, grounded and meter-scaled.
 
 const MODELS := [
 	{
@@ -27,6 +27,34 @@ const MODELS := [
 			"SignsAndMarkings", "Windows", "Workshop"], "triangles": 24000, "surfaces": 16,
 		"minimum": Vector3(18.19, 6.4, 13.89), "maximum": Vector3(18.8, 6.8, 14.2),
 		"two_sided": [],
+	},
+	{
+		"file": "nissan_cube", "root": "NissanCube",
+		"groups": ["BrownBodywork", "CabinAndDriver", "ChromeHandlesGrilleAndBadges",
+			"HeadlightsAndIndicators", "LampGlazing", "RearBrakeLights",
+			"RubberTrimAndUnderbody", "WraparoundGlazing"],
+		"triangles": 45000, "surfaces": 41, "two_sided": [],
+		"minimum": Vector3(4.0, 1.80, 2.0), "maximum": Vector3(4.25, 1.95, 2.16),
+		"wheelbase": 2.53, "wheel_height": 0.323, "half_track": 0.744,
+		"paint_marker": true, "ground_tolerance": 0.002,
+	},
+	{
+		"file": "hyundai_sonata", "root": "HyundaiSonata",
+		"groups": ["BodyPaint", "CabinAndSeats", "Glazing", "HeadlightsAndIndicators",
+			"LampGlazing", "Metalwork", "RearBrakeLights", "RubberTrimAndUnderbody"],
+		"triangles": 45000, "surfaces": 43, "two_sided": [],
+		"minimum": Vector3(4.80, 1.43, 2.05), "maximum": Vector3(5.12, 1.57, 2.25),
+		"wheelbase": 2.84, "wheel_height": 0.338, "half_track": 0.795,
+		"paint_marker": true, "light_markers": true,
+	},
+	{
+		"file": "honda_crv", "root": "HondaCRV",
+		"groups": ["BodyPaint", "CabinAndSeats", "Glazing", "HeadlightsAndIndicators",
+			"LampGlazing", "Metalwork", "RearBrakeLights", "RubberTrimAndUnderbody"],
+		"triangles": 45000, "surfaces": 42, "two_sided": [],
+		"minimum": Vector3(4.55, 1.64, 2.05), "maximum": Vector3(4.88, 1.75, 2.25),
+		"wheelbase": 2.62, "wheel_height": 0.355, "half_track": 0.780,
+		"paint_marker": true, "light_markers": true,
 	},
 ]
 
@@ -67,11 +95,26 @@ func _test_model(model: Dictionary) -> void:
 		return
 	_expect(assembly.position.is_zero_approx() and assembly.scale.is_equal_approx(Vector3.ONE),
 		label + ": the assembly must retain an unscaled origin.")
-	_expect(assembly.get_child_count() == model["groups"].size(),
+	var car: bool = model.has("wheelbase")
+	var group_root := assembly.get_node_or_null("Chassis") as Node3D if car else assembly
+	_expect(group_root != null, label + ": the car must retain its chassis.")
+	if group_root == null:
+		imported.free()
+		return
+	var markers := 1 if model.get("paint_marker", false) else 0
+	if model.get("light_markers", false):
+		markers += 4
+		for socket in ["LeftBrakeSocket", "RightBrakeSocket", "LeftHeadlightSocket", "RightHeadlightSocket"]:
+			_expect(group_root.get_node_or_null(socket) is Node3D,
+				label + ": missing runtime lamp socket " + socket)
+	_expect(group_root.get_child_count() == model["groups"].size() + markers,
 		label + ": unexpected or missing material-group nodes.")
 	for group in model["groups"]:
-		_expect(assembly.get_node_or_null(NodePath(group)) is MeshInstance3D,
+		_expect(group_root.get_node_or_null(NodePath(group)) is MeshInstance3D,
 			label + ": missing mesh group " + group)
+	if markers:
+		_expect(group_root.get_node_or_null("BodyPaintSample") is Node3D,
+			label + ": the existing paint marker must survive refinement.")
 	var triangles := 0
 	var surfaces := 0
 	var mesh_count := 0
@@ -118,16 +161,49 @@ func _test_model(model: Dictionary) -> void:
 						var facing := Vector2(normals[index].x, normals[index].z)
 						_expect(facing.dot(radial) > 0.0,
 							"The plug thread must face outward, not disappear behind back-face culling.")
-	_expect(mesh_count == model["groups"].size() and triangles > 0
+	var expected_meshes: int = model["groups"].size() + (8 if car else 0)
+	_expect(mesh_count == expected_meshes and triangles > 0
 		and triangles <= model["triangles"] and surfaces == model["surfaces"],
 		label + ": the mesh, triangle or material-surface budget changed.")
-	_expect(absf(bounds.position.y) < 0.0001, label + ": the base must be grounded at Y = 0.")
+	_expect(absf(bounds.position.y) < float(model.get("ground_tolerance", 0.0001)),
+		label + ": the base must be grounded at Y = 0.")
 	for axis in 3:
 		_expect(bounds.size[axis] >= model["minimum"][axis]
 			and bounds.size[axis] <= model["maximum"][axis],
 			"%s: incorrect meter-scale extent on axis %d: %s" % [label, axis, bounds.size])
 	print("%s: %d triangles, %d surfaces, size %s" % [label, triangles, surfaces, bounds.size])
+	if car:
+		_test_car_wheels(assembly, group_root, model)
 	imported.free()
+
+
+func _test_car_wheels(assembly: Node3D, chassis: Node3D, model: Dictionary) -> void:
+	var label: String = model["file"]
+	_expect(assembly.get_child_count() == 5, label + ": chassis and four wheel pivots are required.")
+	var wheels := {
+		"FrontLeftWheel": ["LF", Vector3(1, 1, -1)],
+		"FrontRightWheel": ["RF", Vector3(1, 1, 1)],
+		"RearLeftWheel": ["LR", Vector3(-1, 1, -1)],
+		"RearRightWheel": ["RR", Vector3(-1, 1, 1)],
+	}
+	for wheel_name in wheels:
+		var pivot := assembly.get_node_or_null(NodePath(wheel_name)) as Node3D
+		_expect(pivot != null, label + ": missing wheel pivot " + wheel_name)
+		if pivot == null:
+			continue
+		var expected: Vector3 = wheels[wheel_name][1] * Vector3(
+			float(model["wheelbase"]) / 2.0, float(model["wheel_height"]), float(model["half_track"]))
+		_expect(pivot.position.distance_to(expected) < 0.0001,
+			label + ": wheelbase, ground height or track changed on " + wheel_name)
+		var code: String = wheels[wheel_name][0]
+		_expect(pivot.get_child_count() == 2
+			and pivot.get_node_or_null(NodePath(code + "Tires")) is MeshInstance3D
+			and pivot.get_node_or_null(NodePath(code + "AlloyRims")) is MeshInstance3D,
+			label + ": each pivot must retain separate tires and rims.")
+		var before := chassis.global_transform
+		pivot.rotate_z(0.4)
+		_expect(chassis.global_transform.is_equal_approx(before),
+			label + ": wheel rotation must not move the chassis.")
 
 
 func _expect(condition: bool, message: String) -> void:

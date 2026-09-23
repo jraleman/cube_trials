@@ -16,7 +16,10 @@ static func engine() -> AudioStreamWAV:
 ## Meaningful events also receive visible feedback and the shell's audio captions.
 static func cues() -> Dictionary[String, AudioStreamWAV]:
 	return {
+		"hazards": _tone([440.0, 554.37], 0.045),
 		"jump": _tone([261.63, 392.0], 0.055),
+		"flip": _tone([523.25, 783.99], 0.06),
+		"trick": _tone([659.25, 783.99, 1046.5], 0.09),
 		"plug": _tone([659.25, 987.77], 0.10),
 		"checkpoint": _tone([392.0, 523.25, 659.25], 0.09),
 		"crash": _tone([110.0, 73.42], 0.15),

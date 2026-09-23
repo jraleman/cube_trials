@@ -15,6 +15,7 @@ const Daylight = preload("res://games/cube_trials/world/daylight.gd")
 const TrialHUD = preload("res://games/cube_trials/trial_hud.gd")
 
 var _failures := PackedStringArray()
+var _course := Course.new()
 var _game: Node
 var _capture_dir := ""
 var _peak_draws := 0
@@ -86,6 +87,7 @@ func _run() -> void:
 	await _render_frames()
 	await _test_rendered_impacts()
 	await _test_rendered_coilovers()
+	await _test_rendered_tricks()
 	await _test_damage_looks()
 	for stage in State.DAMAGE_NAMES.size():
 		await _test_rendered_brakes(stage)
@@ -104,20 +106,20 @@ func _run() -> void:
 		"The rendered quarry shot must be an actual airborne drive.")
 	var view: Control = _game.get("_view")
 	var landing: Vector2 = view.call("project_point",
-		Art.world_point(Vector2(3100.0, Course.ground_height(3100.0))))
+		Art.world_point(Vector2(3100.0, _course.ground_height(3100.0))))
 	_expect(Rect2(Vector2.ZERO, view.size).has_point(landing),
 		"The camera must show the far-side landing during the quarry jump.")
 	_test_brown_cube()
 	_test_draw_budget()
 	await _check_rendered_coilovers(view as View, "quarry-flight", true)
 	await _capture("quarry-jump")
-	for index in range(1, Course.gap_intervals().size()):
-		var gap := Course.gap_intervals()[index]
+	for index in range(1, _course.gap_intervals().size()):
+		var gap := _course.gap_intervals()[index]
 		_drive_to((gap.x + gap.y) * 0.5)
 		await _render_frames()
 		_expect(state.contacts == 0 and state.recoveries == 0,
 			"Each new ravine capture must be a clean, input-driven manual jump.")
-		var far_side := Vector2(gap.y + 140.0, Course.ground_height(gap.y + 140.0))
+		var far_side := Vector2(gap.y + 140.0, _course.ground_height(gap.y + 140.0))
 		_expect(Rect2(Vector2.ZERO, view.size).has_point(
 			view.call("project_point", Art.world_point(far_side))),
 			"The side camera must reveal the landing across every wider ravine.")
@@ -145,6 +147,7 @@ func _run() -> void:
 	_game.free()
 	state = null
 	await _test_imported_gallery()
+	await _test_reference_car_gallery_menu()
 	get_root().size = Vector2i(1280, 720)
 	var menu := (load("res://scenes/menus/main_menu.tscn") as PackedScene).instantiate()
 	get_root().add_child(menu)
@@ -197,7 +200,7 @@ func _test_bounds() -> void:
 	for action in buttons:
 		var button: Button = buttons[action]
 		var rect := button.get_global_rect()
-		_expect(rect.size.y * physical_scale >= 44.0,
+		_expect(rect.size.x * physical_scale >= 44.0 and rect.size.y * physical_scale >= 44.0,
 			"%s needs a 44-pixel physical touch target." % action)
 		_expect(button.get_theme_font_size("font_size") * physical_scale >= 12.0,
 			"%s must retain legible text on a phone." % action)
@@ -251,8 +254,8 @@ func _test_bounds() -> void:
 			<= 24.0 * float(_game.get("_ui_factor")),
 			"Feedback must stay tucked below the counters after portrait/landscape or UI-scale changes.")
 	var car_bounds: Rect2 = view.call("car_screen_bounds")
-	_expect(car_bounds.size.x * physical_scale >= 48.0,
-		"The Cube must remain at least 48 physical pixels wide on a phone.")
+	_expect(maxf(car_bounds.size.x, car_bounds.size.y) * physical_scale >= 48.0,
+		"The Cube's long dimension must remain at least 48 physical pixels, even during a flip.")
 
 
 func _test_full_hud() -> void:
@@ -350,25 +353,41 @@ func _test_rendered_coilovers() -> void:
 		var resting := view.world.car.springs[1].length
 		await _check_rendered_coilovers(view, "parked", false)
 		Input.action_press(Options.JUMP)
-		for frame in 100:
+		var landing_frame := -1
+		for frame in 150:
 			_game.call("_update_round", 1.0 / 60.0, 0.0)
 			Input.action_release(Options.JUMP)
-			if frame not in [3, 25, 62, 72, 99]:
+			if frame > 0 and state.contacts > 0 and landing_frame < 0:
+				landing_frame = frame
+			var pose := ""
+			if frame == 3:
+				pose = "takeoff"
+			elif frame == 25:
+				pose = "airborne"
+			elif frame == 40:
+				pose = "apex"
+			elif landing_frame >= 0 and frame == landing_frame + 1:
+				pose = "landing"
+			elif landing_frame >= 0 and frame == landing_frame + 10:
+				pose = "rebound"
+			elif frame == 149:
+				pose = "settled"
+			if pose.is_empty():
 				continue
-			var pose := "takeoff" if frame == 3 else ("airborne" if frame == 25 \
-				else ("landing" if frame == 62 else ("rebound" if frame == 72 else "settled")))
 			await _render_frames()
-			var airborne := frame in [3, 25]
+			var airborne := pose in ["takeoff", "airborne", "apex"]
 			_expect((state.contacts == 0) == airborne,
 				"The coilover capture must sample the intended flight or grounded phase: %s." % pose)
 			var visible_pixels := await _check_rendered_coilovers(view, pose, airborne)
 			_test_bounds()
 			_test_draw_budget()
-			if frame == 25:
+			if pose == "airborne":
 				_expect(state.contacts == 0 and view.world.car.springs[1].length > resting + 0.25,
 					"The airborne wheels must drop slightly farther to reveal the extended coilovers.")
 				await _test_rendered_wheel_droop(view, state, visible_pixels)
 			await _capture("coilovers-%s-%dx%d" % [pose, dimensions.x, dimensions.y])
+		_expect(landing_frame > 75 and landing_frame < 90,
+			"The taller standing jump must still reach a real two-wheel landing.")
 		Input.action_press(Options.THROTTLE)
 		_game.call("_update_round", 0.2, 0.0)
 		Input.action_release(Options.THROTTLE)
@@ -431,6 +450,57 @@ func _test_rendered_wheel_droop(view: View, state: State, extended_pixels: Packe
 			% get_root().size + "(axle %d: %d -> %d, need +%d)."
 			% [index, original_pixels[index], extended_pixels[index], minimum_gain])
 	view.present(0.0)
+	await _render_frames()
+
+
+func _test_rendered_tricks() -> void:
+	var view := _game.get("_view") as View
+	var hud := _game.get("_trial_hud") as TrialHUD
+	_game.call("_set_reduced_motion_enabled", false)
+	for dimensions in [Vector2i(1280, 720), Vector2i(390, 844)]:
+		get_root().size = dimensions
+		_game.call("_on_play_again_pressed")
+		_game.call("_update_round", 0.5, 0.0)
+		await _render_frames()
+		var state: State = _game.get("_state")
+		var saw_pending := false
+		Input.action_press(Options.JUMP)
+		for frame in 120:
+			if frame == 10:
+				Input.action_press(Options.NOSE_UP)
+			elif frame == 24:
+				_game.call("_toggle_hazards")
+			elif frame == 60:
+				Input.action_release(Options.NOSE_UP)
+			_game.call("_update_round", 1.0 / 60.0, 0.0)
+			Input.action_release(Options.JUMP)
+			_expect(Rect2(Vector2.ZERO, view.size).encloses(view.car_screen_bounds()),
+				"The complete rendered car must stay in view throughout a real flip.")
+			if frame in [30, 50]:
+				await _render_frames()
+				_test_bounds()
+				await _capture("flip-pose-%d-%dx%d" % [frame, dimensions.x, dimensions.y])
+			if state.pending_flips > 0 and not saw_pending:
+				saw_pending = true
+				await _render_frames()
+				_test_bounds()
+				_expect(hud.points_label.text == "0" and hud.feedback_label.text.contains(
+					"LAND +%d" % state.pending_trick_points())
+					and hud.feedback_label.text.contains("HAZARDS x1.15"),
+					"Rendered trick feedback must explain landing without inflating the score.")
+				await _capture("flip-pending-%dx%d" % [dimensions.x, dimensions.y])
+		await _render_frames()
+		_test_bounds()
+		_expect(saw_pending and state.landed_flips == 1 and state.jump_points > 0
+			and state.hazard_points > 0
+			and hud.points_label.text == str(state.score())
+			and hud.feedback_label.text.contains("+%d" % state.score()) and state.lives_left == 5,
+			"A landed flip must show its dynamic banked total and readable desktop/phone feedback.")
+		await _capture("flip-banked-%dx%d" % [dimensions.x, dimensions.y])
+	Driver.release_controls()
+	_game.call("_on_play_again_pressed")
+	_game.call("_set_reduced_motion_enabled", true)
+	get_root().size = Vector2i(1280, 720)
 	await _render_frames()
 
 
@@ -537,7 +607,8 @@ func _test_imported_gallery() -> void:
 		get_root().size = dimensions
 		await _render_frames()
 		stage.size = get_root().get_visible_rect().size
-		for id: String in [Options.EXHIBIT_SUSPENSION, Options.EXHIBIT_PLUG, Options.EXHIBIT_CHECKPOINT,
+		for id: String in [Options.EXHIBIT_SONATA, Options.EXHIBIT_CRV,
+				Options.EXHIBIT_SUSPENSION, Options.EXHIBIT_PLUG, Options.EXHIBIT_CHECKPOINT,
 				Options.EXHIBIT_PINE, Options.EXHIBIT_GARAGE]:
 			stage.configure({"id": id})
 			for pose: Vector2 in [Vector2.ZERO, Vector2(PI * 0.5, 0.0),
@@ -561,6 +632,70 @@ func _test_imported_gallery() -> void:
 				if pose.is_zero_approx():
 					await _capture("gallery-%s-%dx%d" % [id, dimensions.x, dimensions.y])
 	stage.free()
+
+
+func _test_reference_car_gallery_menu() -> void:
+	var achievements := get_root().get_node("AchievementManager")
+	achievements.call("unlock", Course.COPPER_COMPLETE)
+	achievements.call("unlock", Course.SUNSET_COMPLETE)
+	var gallery := (load("res://scenes/menus/gallery.tscn") as PackedScene).instantiate() as Control
+	gallery.set("game_context_id", Options.GAME_ID)
+	get_root().add_child(gallery)
+	var stage := gallery.get("_stage") as GalleryStage
+	_expect(stage != null, "The Gallery menu must mount the game's actual 3D stage.")
+	if stage == null:
+		gallery.free()
+		return
+	var shown := {}
+	for dimensions in [Vector2i(1280, 720), Vector2i(390, 844)]:
+		get_root().size = dimensions
+		await _render_frames()
+		for sample: Dictionary in [
+			{"id": Options.EXHIBIT_SONATA, "title": "Hyundai Sonata",
+				"asset": GalleryStage.SONATA_MODEL},
+			{"id": Options.EXHIBIT_CRV, "title": "Honda CR-V",
+				"asset": GalleryStage.CRV_MODEL},
+		]:
+			var id: String = sample["id"]
+			var button := gallery.find_child("Exhibit_" + id, true, false) as Button
+			_expect(button != null and not button.disabled,
+				"The Gallery must expose an unlocked button for " + id)
+			if button == null or button.disabled:
+				continue
+			button.pressed.emit()
+			await _render_frames()
+			var model: Node3D = stage.get("_exhibit")
+			var asset: PackedScene = sample["asset"]
+			_expect(model != null and model.scene_file_path == asset.resource_path,
+				"Selecting " + id + " must display its actual saved car model.")
+			if model == null:
+				continue
+			_expect((gallery.get_node("%ExhibitTitle") as Label).text == sample["title"]
+				and not (gallery.get_node("%Placeholder") as Label).visible
+				and (gallery.get_node("%Controls") as Control).visible,
+				"A reference-car selection must show its label and working viewer, not a badge.")
+			if shown.has(id):
+				_expect(model == shown[id], "Revisiting a car must reuse its cached exhibit.")
+			shown[id] = model
+			for resident: Node3D in (stage.get("_built") as Dictionary).values():
+				_expect(resident.visible == (resident == model),
+					"Only the selected Gallery exhibit may remain visible.")
+			var camera: Camera3D = stage.get("_camera")
+			var initial := camera.transform
+			(gallery.get_node("%TurnRight") as Button).button_down.emit()
+			await _render_frames()
+			_expect(not camera.transform.is_equal_approx(initial),
+				"The Gallery turn control must orbit " + id)
+			(gallery.get_node("%ZoomIn") as Button).button_down.emit()
+			await _render_frames()
+			_expect(float(stage.get("_zoom")) > 1.0,
+				"The Gallery zoom control must magnify " + id)
+			(gallery.get_node("%ResetButton") as Button).pressed.emit()
+			await _render_frames()
+			_expect(camera.transform.is_equal_approx(initial),
+				"Reset must restore the reference car's default framing.")
+			await _capture("gallery-menu-%s-%dx%d" % [id, dimensions.x, dimensions.y])
+	gallery.free()
 
 
 func _test_draw_budget() -> void:

@@ -1,6 +1,6 @@
 extends RefCounted
 
-## What a bought paint or wheel finish actually looks like on the Cube.
+## Car-specific store palettes and player paint, without mutating imported materials.
 ##
 ## [ChickenPitOptions]-style catalogues say what is for sale and what it costs;
 ## this says what it *is*. The split matters here more than usual, because the
@@ -12,26 +12,34 @@ extends RefCounted
 ## without a wallet existing, and the framework never learns what "Signal
 ## Orange" means.
 ##
-## The factory look is deliberately *absent* from both tables. A paint the
-## player has not bought applies no override at all, so the exported bronze and
-## its silver alloys are the materials Blender wrote rather than a transcription
-## of them that could quietly drift.
+## Factory item ids are absent from the finish tables, so each car keeps its
+## exported coat and alloys rather than a transcription that could drift.
+
+const Profiles = preload("res://games/cube_trials/vehicle_profiles.gd")
 
 ## Surfaces a paint restates, by the material name the exporter batched them
 ## under. Matching by name rather than index survives the exporter reordering
 ## its batches; `cube_trials_3d_test.gd` fails loudly if a name disappears.
 const BODY_COAT := "Cube Bronze metallic"
 const BODY_EDGE := "Cube Bronze edge"
+const MODERN_BODY_COAT := "Cube Body paint"
+const MODERN_RIM_FACE := "Cube Alloy"
+const MODERN_RIM_LIP := "Cube Chrome"
 ## The wheel's painted face and its polished lip. The hub carrier and brake disc
 ## keep their own materials, because a wheel finish is not a bare-metal respray.
 const RIM_FACE := "Cube Silver alloy"
 const RIM_LIP := "Cube Polished chrome"
 
-## What the exporter actually painted. The two free looks apply no override, so
+## What the exporter actually painted. Factory looks apply no override, so
 ## the shelf shows these on their cards: the swatch and the car are then one
 ## fact in one place, and `cube_trials_3d_test.gd` checks both against the GLB.
 const FACTORY_COAT := Color("84674a")
 const FACTORY_ALLOY := Color("c7cdd1")
+const FACTORY_COATS := {
+	Profiles.CUBE: FACTORY_COAT,
+	Profiles.SONATA: Color("e7ebf0"),
+	Profiles.CRV: Color("07387f"),
+}
 
 ## How much darker the edge batch sits under the main coat, measured off the
 ## exported bronze pair (`#84674a` against `#795a3c`) so a new colour shades
@@ -64,6 +72,48 @@ const PAINTS := {
 	"cube_paint_gold": {
 		"color": Color("d9a441"), "metallic": 0.95, "roughness": 0.12,
 	},
+	"cube_sonata_paint_lagoon": {
+		"color": Color("238d99"), "metallic": 0.55, "roughness": 0.27,
+	},
+	"cube_sonata_paint_coral": {
+		"color": Color("d96f69"), "metallic": 0.35, "roughness": 0.30,
+	},
+	"cube_sonata_paint_azure": {
+		"color": Color("346aba"), "metallic": 0.75, "roughness": 0.23,
+	},
+	"cube_sonata_paint_burgundy": {
+		"color": Color("742b49"), "metallic": 0.70, "roughness": 0.22,
+	},
+	"cube_sonata_paint_lilac": {
+		"color": Color("9a86c8"), "metallic": 0.48, "roughness": 0.30,
+	},
+	"cube_sonata_paint_rose": {
+		"color": Color("c18f8e"), "metallic": 0.88, "roughness": 0.18,
+	},
+	"cube_sonata_paint_champagne": {
+		"color": Color("e4c995"), "metallic": 0.82, "roughness": 0.16,
+	},
+	"cube_crv_paint_forest": {
+		"color": Color("245447"), "metallic": 0.45, "roughness": 0.38,
+	},
+	"cube_crv_paint_glacier": {
+		"color": Color("a9c7d8"), "metallic": 0.78, "roughness": 0.26,
+	},
+	"cube_crv_paint_canyon": {
+		"color": Color("aa3e31"), "metallic": 0.60, "roughness": 0.29,
+	},
+	"cube_crv_paint_tundra": {
+		"color": Color("b39f79"), "metallic": 0.30, "roughness": 0.43,
+	},
+	"cube_crv_paint_aurora": {
+		"color": Color("594a82"), "metallic": 0.68, "roughness": 0.24,
+	},
+	"cube_crv_paint_storm": {
+		"color": Color("41494e"), "metallic": 0.72, "roughness": 0.22,
+	},
+	"cube_crv_paint_arctic": {
+		"color": Color("bfede5"), "metallic": 0.78, "roughness": 0.17,
+	},
 }
 
 ## Wheel finishes. `face` is the spoke; `lip` is the polished rim edge, which a
@@ -94,7 +144,7 @@ static var _coats: Dictionary = {}
 
 
 ## True when [param id] names something this module can actually paint, which is
-## every item the shop sells except the two free factory looks.
+## every item the shop sells except the free factory looks.
 static func repaints(id: String) -> bool:
 	return PAINTS.has(id) or RIMS.has(id)
 
@@ -118,9 +168,23 @@ static func dress_body(instance: MeshInstance3D, paint_id: String) -> void:
 	var paint: Dictionary = PAINTS.get(paint_id, {})
 	var coat := Color(paint["color"]) if not paint.is_empty() else Color.WHITE
 	_restate(instance, paint_id, BODY_COAT, coat, paint)
+	_restate(instance, paint_id, MODERN_BODY_COAT, coat, paint)
 	_restate(
 		instance, paint_id, BODY_EDGE, coat.darkened(EDGE_DARKEN), paint, EDGE_ROUGHEN
 	)
+
+
+## Seat colours have their own cache keys and retain the factory surface response.
+static func dress_player_body(instance: MeshInstance3D, color: Color) -> void:
+	for surface in instance.mesh.get_surface_count():
+		var exported := instance.mesh.surface_get_material(surface) as StandardMaterial3D
+		if exported == null or exported.resource_name not in [BODY_COAT, BODY_EDGE, MODERN_BODY_COAT]:
+			continue
+		var tint := color.darkened(EDGE_DARKEN) if exported.resource_name == BODY_EDGE else color
+		instance.set_surface_override_material(surface, _coat(
+			instance.mesh, surface, "player/" + color.to_html(), tint,
+			{"metallic": exported.metallic, "roughness": exported.roughness}, 0.0
+		))
 
 
 ## Paints one wheel's face and lip. Applied to an `AlloyRims` instance only, so
@@ -131,6 +195,8 @@ static func dress_rim(instance: MeshInstance3D, rim_id: String) -> void:
 	var lip := Color(rim["lip"]) if not rim.is_empty() else Color.WHITE
 	_restate(instance, rim_id, RIM_FACE, face, rim)
 	_restate(instance, rim_id, RIM_LIP, lip, rim)
+	_restate(instance, rim_id, MODERN_RIM_FACE, face, rim)
+	_restate(instance, rim_id, MODERN_RIM_LIP, lip, rim)
 
 
 ## Overrides the one surface batched under [param surface_name], or clears that

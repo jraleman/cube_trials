@@ -4,9 +4,10 @@ extends Control
 ##
 ## The gallery screen asks for this by path (`GameManifest.gallery_stage_scene_path`)
 ## and drives it with `configure()`, `set_view()` and `set_auto_spin()`, so the
-## framework never learns what a Nissan Cube is. Everything on the plinth is the
-## same assembly the match builds — the imported car through `cube_model.gd`,
-## the scenery through `copper_creek.gd` — settled and lit the same way. A
+## framework never learns what a Nissan Cube is. Course exhibits use the same
+## assemblies the match builds — the imported car through `cube_model.gd`,
+## the scenery through `copper_creek.gd` — settled and lit the same way. The
+## additional reference cars use their saved, meter-scaled GLBs directly. A
 ## trials course is driven past at speed from one fixed side, so a gallery that
 ## showed a nicer version of the car would be an advert rather than a museum.
 
@@ -17,6 +18,8 @@ const Cube = preload("res://games/cube_trials/world/cube_model.gd")
 const Landscape = preload("res://games/cube_trials/world/copper_creek.gd")
 const Options = preload("res://games/cube_trials/cube_trials_options.gd")
 const State = preload("res://games/cube_trials/trial_state.gd")
+const SONATA_MODEL = preload("res://games/cube_trials/assets/models/hyundai_sonata.glb")
+const CRV_MODEL = preload("res://games/cube_trials/assets/models/honda_crv.glb")
 
 ## Long enough on the springs for the car to stop bouncing and sit at its real
 ## ride height, which is the only pose worth exhibiting it in.
@@ -40,6 +43,8 @@ const FRAMING := {
 	Options.EXHIBIT_CUBE: {"yaw": 0.9599, "pitch": 0.2094},
 	Options.EXHIBIT_WHEEL: {"yaw": 0.6109, "pitch": 0.1745},
 	Options.EXHIBIT_SUSPENSION: {"yaw": 0.0, "pitch": 0.1222},
+	Options.EXHIBIT_SONATA: {"yaw": 0.9599, "pitch": 0.2094},
+	Options.EXHIBIT_CRV: {"yaw": 0.9599, "pitch": 0.2094},
 	Options.EXHIBIT_PLUG: {"yaw": 0.0, "pitch": 0.2618},
 	Options.EXHIBIT_CHECKPOINT: {"yaw": 0.3491, "pitch": 0.1222},
 	Options.EXHIBIT_SIGN: {"yaw": 0.2618, "pitch": 0.0873},
@@ -53,7 +58,7 @@ var _camera: Camera3D
 var _plinth: Node3D
 var _exhibit: Node3D
 ## Built exhibits, kept by id and hidden rather than rebuilt. Instancing the
-## car's 44,000-triangle export on every click of a nine-item list would be the
+## detailed car exports on every selection would be the
 ## one expensive thing this screen does, and it can be open over a live round.
 var _built := {}
 var _focus := Vector3.ZERO
@@ -133,6 +138,10 @@ func build_exhibit(id: String) -> Node3D:
 			return _wheel()
 		Options.EXHIBIT_SUSPENSION:
 			return _suspension()
+		Options.EXHIBIT_SONATA:
+			return SONATA_MODEL.instantiate() as Node3D
+		Options.EXHIBIT_CRV:
+			return CRV_MODEL.instantiate() as Node3D
 		Options.EXHIBIT_PLUG:
 			return _plug()
 		Options.EXHIBIT_CHECKPOINT:

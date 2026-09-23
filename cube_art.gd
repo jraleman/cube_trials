@@ -1,7 +1,8 @@
 extends RefCounted
 
-## Copper Creek's paint, scale and daylight are shared by play and its 3D portraits.
+## Paint, scale and daylight are shared by the trails and their 3D portraits.
 
+const Course = preload("res://games/cube_trials/course.gd")
 const Daylight = preload("res://games/cube_trials/world/daylight.gd")
 const INK := Color("253336")
 const CREAM := Color("ffedc7")
@@ -27,6 +28,24 @@ static func material(roughness := 0.85, metallic := 0.0) -> StandardMaterial3D:
 	return finish
 
 
+static func soft_particle_texture() -> GradientTexture2D:
+	var gradient := Gradient.new()
+	gradient.offsets = PackedFloat32Array([0.0, 0.16, 0.4, 1.0])
+	gradient.colors = PackedColorArray([
+		Color.WHITE, Color(1, 1, 1, 0.75), Color(1, 1, 1, 0.2), Color(1, 1, 1, 0),
+	])
+	var texture := GradientTexture2D.new()
+	texture.gradient = gradient
+	texture.width = 32
+	texture.height = 32
+	texture.fill = GradientTexture2D.FILL_RADIAL
+	texture.fill_from = Vector2(0.5, 0.5)
+	texture.fill_to = Vector2(1.0, 0.5)
+	return texture
+
+
 ## Ordinary sky lighting and shadow maps work on desktop, web and mobile Compatibility.
-static func light_stage(parent: Node3D) -> Daylight:
-	return Daylight.new(parent)
+static func light_stage(
+	parent: Node3D, scenery: Course.Scenery = Course.Scenery.MOUNTAIN
+) -> Daylight:
+	return Daylight.new(parent, scenery)

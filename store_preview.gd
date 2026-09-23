@@ -11,7 +11,7 @@ extends Control
 ##
 ## The portrait is deliberately still, for the same reason the gallery's is not:
 ## a gallery is somewhere to look around a model, and a shelf is somewhere to
-## compare thirteen of them at a glance. A card that turned would be animation
+## compare finishes at a glance. A card that turned would be animation
 ## nobody asked for, it would make the shelf expensive, and it would leave
 ## reduced motion something to switch off on a screen that should not need it.
 
@@ -19,6 +19,7 @@ const Art = preload("res://games/cube_trials/cube_art.gd")
 const Cube = preload("res://games/cube_trials/world/cube_model.gd")
 const Options = preload("res://games/cube_trials/cube_trials_options.gd")
 const State = preload("res://games/cube_trials/trial_state.gd")
+const Profiles = preload("res://games/cube_trials/vehicle_profiles.gd")
 
 ## Long enough on the springs for the car to stop bouncing and sit at the ride
 ## height a parked Cube actually holds, which is what a paint card should show.
@@ -44,6 +45,11 @@ var _lens := CAR_LENS
 var _field_of_view := CAR_FIELD_OF_VIEW
 var _bounds := AABB()
 var _inert := false
+var _item: Dictionary = {}
+var _draw_queued := false
+var vehicle_id := Profiles.CUBE
+var player_color := Color.TRANSPARENT
+var wheel_finish := ""
 
 
 func _ready() -> void:
@@ -53,22 +59,36 @@ func _ready() -> void:
 		return
 	_build_case()
 	resized.connect(_reframe)
+	visibility_changed.connect(_request_draw)
+	if not _item.is_empty():
+		_show_item()
 
 
-## Draws [param item] — a `Store.describe()` result. Its `kind` chooses the
-## subject and its `id` chooses the finish; nothing else here is read, so an
-## item that changes price or gets a longer description never redraws.
+## Its kind selects the car or wheel and its id selects the finish. Ownership
+## and price never affect whether the advertised model can be previewed.
 func configure(item: Dictionary) -> void:
+	_item = item.duplicate(true)
 	if _inert or _stage == null:
 		return
+	_show_item()
+
+
+func _show_item() -> void:
 	if _subject != null:
 		_stage.remove_child(_subject)
 		_subject.queue_free()
 		_subject = null
-	var id := str(item.get("id", ""))
-	if str(item.get("kind", "")) == Options.RIM_KIND:
+	var id := str(_item.get("id", ""))
+	var kind := str(_item.get("kind", Options.PAINT_KIND))
+	if kind == Options.RIM_KIND:
+		vehicle_id = Profiles.CUBE
 		_show_wheel(id)
 	else:
+		var owner: Variant = Options.PAINT_KINDS.find_key(kind)
+		if owner == null:
+			push_error("Cube Trials preview received an unknown paint kind: " + kind)
+			return
+		vehicle_id = str(owner)
 		_show_car(id)
 	_request_draw()
 
@@ -80,10 +100,12 @@ func set_preview_running(_running: bool) -> void:
 
 
 func _show_car(paint: String) -> void:
-	var car := Cube.new()
+	var car := Cube.new(vehicle_id)
 	car.paint_id = paint
+	car.player_color = player_color
+	car.rim_id = wheel_finish
 	_stage.add_child(car)
-	var settled := State.new()
+	var settled := State.new(vehicle_id)
 	settled.advance(SETTLE_SECONDS, 0.0, 0.0, 0.0)
 	car.apply_state(settled)
 	# `apply_state` places the car where the trial put it; the plinth is the
@@ -94,7 +116,7 @@ func _show_car(paint: String) -> void:
 
 
 func _show_wheel(rim: String) -> void:
-	var wheel := Cube.wheel_display(rim)
+	var wheel := Cube.wheel_display(rim, vehicle_id)
 	wheel.name = "AlloyWheel"
 	_stage.add_child(wheel)
 	_subject = wheel
@@ -166,7 +188,8 @@ func _build_case() -> void:
 	_viewport.own_world_3d = true
 	_viewport.gui_disable_input = true
 	_viewport.msaa_3d = Viewport.MSAA_2X
-	_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE
+	_viewport.render_target_update_mode = SubViewport.UPDATE_DISABLED
+	_viewport.size_changed.connect(_request_draw)
 	container.add_child(_viewport)
 
 	_stage = Node3D.new()
@@ -190,5 +213,14 @@ func _build_case() -> void:
 
 
 func _request_draw() -> void:
-	if _viewport != null:
+	if _viewport == null or _subject == null or not is_visible_in_tree() or _draw_queued:
+		return
+	_draw_queued = true
+	# Routed scenes attach and resize their viewports during their first frame.
+	RenderingServer.frame_post_draw.connect(_draw_once, CONNECT_ONE_SHOT)
+
+
+func _draw_once() -> void:
+	_draw_queued = false
+	if _viewport != null and _subject != null and is_visible_in_tree():
 		_viewport.render_target_update_mode = SubViewport.UPDATE_ONCE

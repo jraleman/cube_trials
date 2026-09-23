@@ -1,4 +1,4 @@
-"""Original Z12 geometry, authored against the multi-view dimensional reference.
+"""Original Cube geometry, authored against the multi-view dimensional reference.
 
 Run in Blender with --python <this file> -- --build-cube. The reference image is
 not read, traced, sampled, packed, or used as a texture by this script.
@@ -206,6 +206,17 @@ def rectangle(cx, cy, width, height, radius=0.04):
                             (cx - width / 2, cy + height / 2)], radius)
 
 
+def harden_surface_edges(obj):
+    # Keep a thin part's rim from bending its broad-face shading normals.
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    for edge in bm.edges:
+        if edge.is_boundary:
+            edge.smooth = False
+    bm.to_mesh(obj.data)
+    bm.free()
+
+
 def surface(name, outline, mapper, mat, group="Details", reverse=False, thickness=0):
     center = sum((Vector(point) for point in outline), Vector((0, 0))) / len(outline)
     vertices = [mapper(*center)]
@@ -223,6 +234,7 @@ def surface(name, outline, mapper, mat, group="Details", reverse=False, thicknes
         faces = [tuple(reversed(face)) for face in faces]
     obj = mesh(name, vertices, faces, mat, group)
     if thickness:
+        harden_surface_edges(obj)
         solid = obj.modifiers.new("Physical pane thickness", "SOLIDIFY")
         solid.thickness = thickness
         solid.offset = -1
@@ -289,7 +301,7 @@ def body_width(y, z):
     if z < bottom or z > top:
         return 0.0
     crown = 0.008 * math.sin(math.pi * (z - bottom) / (top - bottom))
-    radius = 0.065
+    radius = 0.085
     if z > top - radius:
         return width - radius + math.sqrt(max(0, radius ** 2 - (z - top + radius) ** 2)) + crown
     if z < bottom + radius:
@@ -354,7 +366,7 @@ def create_scene():
     SCENE.unit_settings.system = "METRIC"
     SCENE.unit_settings.length_unit = "METERS"
     SCENE["reference"] = "Dimensional study of tools\\reference\\car.png; no image data embedded."
-    SCENE["vehicle"] = "Nissan Cube Z12, 2009 generation; original unbranded geometry."
+    SCENE["vehicle"] = "Nissan Cube reference study; original unbranded geometry."
     SCENE["axes"] = "Z up, nose toward -Y. Model dimensions are in meters."
     vehicle = bpy.data.collections.new("Nissan Cube | Editable model")
     SCENE.collection.children.link(vehicle)
@@ -375,10 +387,10 @@ def create_scene():
     material("Bronze metallic", (0.230, 0.137, 0.068), 0.68, 0.25, 0.33)
     material("Bronze edge", (0.190, 0.103, 0.045), 0.68, 0.32, 0.28)
     material("Panel gaps", (0.020, 0.012, 0.007), 0.10, 0.51)
-    material("Rubber seals", (0.008, 0.011, 0.012), 0.02, 0.39)
+    material("Rubber seals", (0.008, 0.011, 0.012), 0.02, 0.57)
     material("Tire rubber", (0.014, 0.016, 0.019), 0.02, 0.64)
     material("Tread recess", (0.005, 0.007, 0.009), 0.00, 0.82)
-    material("Silver alloy", (0.57, 0.61, 0.64), 0.87, 0.23, 0.16)
+    material("Silver alloy", (0.57, 0.61, 0.64), 0.87, 0.27, 0.12)
     material("Polished chrome", (0.71, 0.75, 0.79), 0.96, 0.12, 0.20)
     material("Brake steel", (0.17, 0.19, 0.20), 0.84, 0.39)
     material("Dark hardware", (0.025, 0.033, 0.038), 0.63, 0.34)
@@ -397,7 +409,7 @@ def create_scene():
     material("Interior charcoal", (0.025, 0.031, 0.032), 0.0, 0.82)
     material("Interior upholstery", (0.058, 0.065, 0.063), 0.0, 0.95)
     material("Mirror", (0.42, 0.52, 0.56), 0.97, 0.07)
-    material("Plate", (0.30, 0.25, 0.18), 0.28, 0.49)
+    material("Plate", (0.22, 0.145, 0.075), 0.28, 0.49)
     material("Studio floor", (0.205, 0.225, 0.24), 0.08, 0.52)
     print("Created a separate metric scene and 26 original surface materials.")
 
@@ -407,7 +419,7 @@ def build_body():
     rings = []
     for y, width, bottom, top in STATIONS:
         ring = []
-        radius = 0.065
+        radius = 0.085
         for cx, cz, start in ((width - radius, top - radius, 0),
                                (-width + radius, top - radius, 90),
                                (-width + radius, bottom + radius, 180),
@@ -459,14 +471,20 @@ def build_body():
     bevel(lower, 0.005, 3, normals=False)
 
     outline = rounded_polygon([(-1.19, 1.005), (-0.70, 1.626), (-0.57, 1.675),
-                               (1.75, 1.675), (1.90, 1.605), (1.946, 1.005)], 0.075)
+                               (1.75, 1.675), (1.90, 1.605), (1.946, 1.005)], 0.095)
     count = len(outline)
-    vertices = [(side * cabin_width(z), y, z) for side in (-1, 1) for y, z in outline]
-    faces = [tuple(reversed(range(count))), tuple(range(count, 2 * count))]
-    faces.extend((index, (index + 1) % count, (index + 1) % count + count, index + count)
-                 for index in range(count))
+    sections = (-1, -0.94, -0.74, -0.42, 0, 0.42, 0.74, 0.94, 1)
+    vertices = [(section * cabin_width(z), y,
+                 z - 0.012 * section * section * max(0, min(1, (z - 1.59) / 0.085)))
+                for section in sections for y, z in outline]
+    last = (len(sections) - 1) * count
+    faces = [tuple(reversed(range(count))), tuple(range(last, last + count))]
+    for row in range(len(sections) - 1):
+        faces.extend((row * count + i, row * count + (i + 1) % count,
+                      (row + 1) * count + (i + 1) % count, (row + 1) * count + i)
+                     for i in range(count))
     cabin = mesh("Hollow cabin and roof", vertices, faces, "Bronze metallic")
-    bevel(cabin, 0.052, 6, apply=True, normals=False)
+    bevel(cabin, 0.067, 6, apply=True, normals=False)
     inner_outline = rounded_polygon([(-1.115, 0.970), (-0.661, 1.582), (-0.545, 1.629),
                                      (1.718, 1.629), (1.851, 1.571), (1.901, 0.970)], 0.06)
     n = len(inner_outline)
@@ -505,9 +523,9 @@ def build_body():
 
     hood = rounded_polygon([(-0.695, -1.951), (0.695, -1.951),
                             (0.756, -1.114), (-0.756, -1.114)], 0.07)
-    hood_map = lambda x, y: (x, y, interpolate(y, 3) + 0.0015 + 0.004 * (1 - (x / 0.78) ** 2))
+    hood_map = lambda x, y: (x, y, interpolate(y, 3) + 0.0008 + 0.002 * (1 - (x / 0.78) ** 2))
     surface("Crowned short hood", hood, hood_map, "Bronze metallic", "Bodywork", thickness=0.003)
-    curve("Hood shut line", [hood_map(*p) for p in hood], 0.0017, "Panel gaps", cyclic=True)
+    curve("Hood shut line", [hood_map(*p) for p in hood], 0.0013, "Panel gaps", cyclic=True)
     box("Underfloor", (0, 0.03, 0.245), (1.38, 3.48, 0.09), "Dark hardware", 0.05)
     for side in (-1, 1):
         box(f"{side:+d} sculpted rocker sill", (side * 0.817, 0.035, 0.265),
@@ -518,16 +536,15 @@ def build_body():
 def build_glazing():
     cabin = bpy.data.objects[GROUPS["Bodywork"]["shell_name"]]
     front = rounded_polygon([(-1.074, 1.075), (-0.656, 1.567), (-0.556, 1.606),
-                             (0.196, 1.605), (0.207, 1.063), (-0.966, 1.052)], 0.105)
+                             (0.196, 1.598), (0.207, 1.063), (-0.966, 1.052)], 0.145)
     passenger = rounded_polygon([(0.369, 1.054), (1.183, 1.054),
-                                 (1.178, 1.602), (0.367, 1.602)], 0.10)
+                                 (1.178, 1.595), (0.367, 1.595)], 0.135)
     quarter = rounded_polygon([(1.270, 1.071), (1.789, 1.078),
-                               (1.765, 1.588), (1.270, 1.598)], 0.115)
+                               (1.765, 1.580), (1.270, 1.588)], 0.135)
     for side in (-1, 1):
         profiles = [("Front door", front, "Cabin glass"),
-                    ("Rear door", passenger, "Privacy glass")]
-        if side == 1:
-            profiles.append(("Quarter", quarter, "Privacy glass"))
+                    ("Rear door", passenger, "Privacy glass"),
+                    ("Quarter", quarter, "Privacy glass")]
         for name, outline, mat in profiles:
             cutter = prism("Side glazing aperture", outline,
                            lambda y, z: (side * 0.81, y, z), (0.19, 0, 0))
@@ -536,7 +553,7 @@ def build_glazing():
             surface(f"{side:+d} {name} curved glass", outline, mapper, mat,
                     "Glazing", reverse=side < 0, thickness=0.004)
             curve(f"{side:+d} {name} window rubber", [mapper(*p) for p in outline],
-                  0.011, "Rubber seals", "Glazing", True)
+                  0.012, "Rubber seals", "Glazing", True)
         mapper = lambda y, z, s=side: (s * (cabin_width(z) + 0.006), y, z)
         strip = rectangle(1.230, 1.327, 0.083, 0.552, 0.008)
         surface(f"{side:+d} black rear divider", strip, mapper, "Rubber seals", "Glazing",
@@ -552,40 +569,21 @@ def build_glazing():
     curve("Windshield bonded surround", [windshield(*p) for p in wind_outline],
           0.014, "Rubber seals", "Glazing", True)
 
-    rear_cut = rectangle(-0.076, 1.337, 1.682, 0.495, 0.10)
-    difference(cabin, prism("Asymmetric backlight aperture", rear_cut,
+    rear_cut = rectangle(0, 1.337, 1.390, 0.495, 0.125)
+    difference(cabin, prism("Rounded rear hatch aperture", rear_cut,
                            lambda x, z: (x, rear_glass_y(z), z), (0, 0.14, 0)))
-    side_cut = rectangle(1.634, 1.337, 0.760, 0.495, 0.10)
-    difference(cabin, prism("Wraparound quarter aperture", side_cut,
-                           lambda y, z: (-0.81, y, z), (0.19, 0, 0)))
-
-    path_length = 2.125
-    outline = rounded_polygon([(0, 1.100), (path_length, 1.100),
-                               (path_length, 1.574), (0, 1.574)], 0.09, 10, 0.012)
-
-    def wrap(s, z):
-        width = cabin_width(z) + 0.004
-        back = rear_glass_y(z) + 0.006
-        if s < 0.53:
-            return (-width, 1.287 + (back - 0.108 - 1.287) * s / 0.53, z)
-        if s < 0.700:
-            angle = (s - 0.53) / 0.170 * math.pi / 2
-            return (-width + 0.108 - 0.108 * math.cos(angle),
-                    back - 0.108 + 0.108 * math.sin(angle), z)
-        t = (s - 0.700) / (path_length - 0.700)
-        return ((-width + 0.108) * (1 - t) + 0.705 * t, back, z)
-
-    rounded_grid("Continuous asymmetric rear and right quarter glass", path_length,
-                 1.100, 1.574, 0.09, wrap, "Privacy glass")
-    curve("Continuous wraparound backlight seal", [wrap(*p) for p in outline],
-          0.013, "Rubber seals", "Glazing", True)
+    rear_map = lambda x, z: (x, rear_glass_y(z) + 0.006, z)
+    surface("Rounded rear hatch glass", rear_cut, rear_map, "Privacy glass", "Glazing",
+            reverse=True, thickness=0.005)
+    curve("Rear hatch bonded seal", [rear_map(*p) for p in rear_cut],
+          0.014, "Rubber seals", "Glazing", True)
     for index in range(7):
         z = 1.16 + index * 0.051
         curve(f"Rear demister filament {index + 1}",
-              [(x, rear_glass_y(z) + 0.011, z) for x in (-0.65, 0.0, 0.65)],
+              [(x, rear_glass_y(z) + 0.011, z) for x in (-0.60, 0.0, 0.60)],
               0.00075, "Bronze edge", "Glazing")
     bevel(cabin, 0.003, 2, normals=True)
-    print("Cut cabin glazing apertures and fitted independent panes, seals and wraparound rear glass.")
+    print("Fitted rounded side panes and bounded rear glass with body-colored rear pillars.")
 
 
 def build_wheels():
@@ -636,8 +634,8 @@ def build_wheels():
                 (0.045, 0.059, 0.099), "Dark hardware", 0.012, "Wheels")
             for index in range(5):
                 angle = math.tau * index / 5 + 0.15
-                shape = [(0.048, -0.022), (0.097, -0.025), (0.182, -0.038),
-                         (0.192, -0.021), (0.187, 0.035), (0.095, 0.025), (0.048, 0.022)]
+                shape = [(0.043, -0.027), (0.097, -0.033), (0.177, -0.048),
+                         (0.192, -0.029), (0.187, 0.041), (0.095, 0.032), (0.043, 0.027)]
                 vertices = []
                 for back in (0.0, -0.025):
                     for radius, tangent in shape:
@@ -788,7 +786,7 @@ def build_details():
             rounded = rounded_polygon(outline, 0.035, edge_step=0.025)
             curve(f"{side:+d} {name} panel seam",
                   [side_point(side, y, z, 0.0035) for y, z in rounded],
-                  0.0026, "Panel gaps", cyclic=True)
+                  0.0018, "Panel gaps", cyclic=True)
         for index, y in enumerate((0.035, 1.018)):
             outline = rectangle(y, 0.953, 0.205, 0.062, 0.029)
             surface(f"{side:+d} handle pocket {index}", outline,
@@ -822,17 +820,19 @@ def build_details():
         surface(f"{side:+d} mirror reflective face", outline, lambda x, z: (x, -0.895, z),
                 "Mirror", "Glazing", reverse=True)
         curve(f"{side:+d} roof gutter",
-              [(side * 0.731, y, 1.679) for y in (-0.53, 0.1, 0.8, 1.63)],
-              0.004, "Bronze edge")
+              [(side * 0.731, y, 1.665) for y in (-0.53, 0.1, 0.8, 1.63)],
+              0.0025, "Bronze edge")
     fuel = rectangle(1.622, 0.904, 0.232, 0.221, 0.041)
     curve("Fuel filler flap seam", [side_point(1, y, z, 0.003) for y, z in fuel],
           0.0021, "Panel gaps", cyclic=True)
     for index, x in enumerate((-0.462, -0.154, 0.154, 0.462)):
-        points = [(x, -0.16, 1.676), (x, -0.09, 1.684), (x, 1.38, 1.684), (x, 1.45, 1.676)]
-        curve(f"Roof pressing rib {index + 1}", points, 0.0065, "Bronze metallic", "Bodywork")
-    box("Antenna mounting foot", (-0.53, 1.660, 1.697), (0.064, 0.108, 0.028),
+        roof_z = 1.675 - 0.012 * (x / 0.782) ** 2
+        points = [(x, -0.16, roof_z), (x, -0.09, roof_z + 0.004),
+                  (x, 1.38, roof_z + 0.004), (x, 1.45, roof_z)]
+        curve(f"Roof pressing rib {index + 1}", points, 0.004, "Bronze metallic", "Bodywork")
+    box("Antenna mounting foot", (-0.53, 1.660, 1.683), (0.064, 0.108, 0.028),
         "Rubber seals", 0.014)
-    curve("Flexible roof aerial", [(-0.53, 1.671, 1.703), (-0.53, 1.795, 1.936)],
+    curve("Flexible roof aerial", [(-0.53, 1.671, 1.689), (-0.53, 1.776, 1.860)],
           0.0043, "Rubber seals")
 
     curve("Black windshield cowl", [windshield(x, 1.086, 0.017) for x in (-0.69, 0, 0.69)],
@@ -875,7 +875,7 @@ def build_rear():
     for x in (-0.194, 0.194):
         cylinder("Rear plate fastener", (x, rear_y(x, 0.462) + 0.018, 0.462),
                  0.004, 0.004, (0, 1, 0), "Dark hardware", segments=16)
-    x, z = -0.493, 0.976
+    x, z = 0.493, 0.976
     face_patch("Tailgate handle recess", x, z, 0.219, 0.068, 0.031, "Bronze edge", True, 0.005)
     box("Side-hinged tailgate pull", (x, rear_y(x, z) + 0.032, z),
         (0.222, 0.042, 0.031), "Bronze metallic", 0.014)
@@ -984,7 +984,7 @@ def build_studio():
         aim(obj, (0, 0, 0.75))
     for frame, name, position, scale in (
         (1, "Front three-quarter", (5.7, -8.3, 3.05), 5.65),
-        (2, "Rear wraparound three-quarter", (-5.9, 8.2, 3.10), 5.65),
+        (2, "Rear three-quarter", (-5.9, 8.2, 3.10), 5.65),
         (3, "Left elevation", (8.0, 0.0, 1.0), 4.8),
         (4, "Front elevation", (0.0, -8.0, 1.0), 2.8),
         (5, "Rear elevation", (0.0, 8.0, 1.0), 2.8),
@@ -1067,4 +1067,6 @@ def build_all():
 
 
 if __name__ == "__main__" and "--build-cube" in sys.argv:
+    if bpy.app.background:
+        bpy.context.preferences.filepaths.save_version = 0
     build_all()

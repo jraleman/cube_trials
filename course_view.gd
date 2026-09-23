@@ -20,6 +20,7 @@ const PERSPECTIVE_FAR := 40.0
 enum CameraMode { SIDE, CHASE, COCKPIT }
 
 var state: State
+var course: Course
 var camera_mode := CameraMode.SIDE
 var reduced_motion := false
 var intense_effects := true
@@ -48,7 +49,8 @@ var _parking_hint_bounds := Rect2()
 var _parking_hint_font_size := 20
 
 
-func _init() -> void:
+func _init(route: Course = null) -> void:
+	course = route if route != null else Course.new()
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	clip_contents = true
 
@@ -62,10 +64,6 @@ func _ready() -> void:
 	world_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
 	world_viewport.size = Vector2i(1280, 720)
 	add_child(world_viewport)
-	world = Landscape.new()
-	world.name = "CopperCreekWorld"
-	world_viewport.add_child(world)
-	world.parking_label.visible = false
 	world_camera = Camera3D.new()
 	world_camera.name = "DrivingCamera"
 	world_camera.projection = Camera3D.PROJECTION_ORTHOGONAL
@@ -73,7 +71,7 @@ func _ready() -> void:
 	world_camera.near = 0.1
 	world_camera.far = 250.0
 	world_camera.current = true
-	world.add_child(world_camera)
+	_build_world()
 	_image = TextureRect.new()
 	_image.name = "WorldImage"
 	_image.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -97,14 +95,31 @@ func _ready() -> void:
 
 ## Dresses the car in the paint and wheels bought from the garage. Only the
 ## look changes: nothing sold alters mass, grip, ride height or the clock.
-func set_finish(paint: String, rim: String) -> void:
+func set_finish(paint: String, rim: String, player_color := Color.TRANSPARENT) -> void:
 	if world != null and world.car != null:
 		world.car.set_finish(paint, rim)
+		world.car.set_player_color(player_color)
 
 
-## Replays reuse the scenery; only the model, camera and collectible visibility reset.
+func _build_world() -> void:
+	if world != null:
+		world.remove_child(world_camera)
+		world_viewport.remove_child(world)
+		world.queue_free()
+	world = Landscape.new(course)
+	world.name = course.id.to_pascal_case() + "World"
+	world_viewport.add_child(world)
+	world.parking_label.visible = false
+	world.add_child(world_camera)
+
+
+## Replays and hot-seat turns reuse scenery; changing level rebuilds it from the same route.
 func configure(run: State) -> void:
 	state = run
+	if course.id != state.course.id:
+		course = state.course
+		_build_world()
+	world.set_vehicle(state.vehicle.id)
 	_camera_ready = false
 	_last_camera_position = state.position
 	ambient_time = 0.0
@@ -178,8 +193,8 @@ func _present_side_camera(delta: float, snap: bool) -> bool:
 	_zoom = maxf(0.1, minf(size.x / visible_width, size.y / 590.0))
 	var visible_height := size.y / _zoom
 	var target := state.position + Vector2(220, 47.5 - visible_height * 0.25)
-	target.x = clampf(target.x, 380.0, Course.FINISH_X + 10.0)
-	var landing_height := Course.ground_height(state.position.x + 330.0)
+	target.x = clampf(target.x, 380.0, course.finish_x + 10.0)
+	var landing_height := course.ground_height(state.position.x + 330.0)
 	if is_finite(landing_height):
 		target.y = maxf(target.y, landing_height - visible_height * 0.34)
 	snap = snap or camera.distance_to(target) > 650.0
@@ -201,7 +216,7 @@ func _present_chase_camera(delta: float, snap: bool) -> void:
 	if not reduced_motion:
 		ahead += clampf(state.velocity.x / 650.0, -0.5, 1.0) * 3.0
 	var target := car + Vector3(ahead, 0.7, 0)
-	var ground := Course.ground_height(target.x / Art.WORLD_SCALE)
+	var ground := course.ground_height(target.x / Art.WORLD_SCALE)
 	if is_finite(ground):
 		target.y = maxf(target.y, (Art.HEIGHT_ORIGIN - ground) * Art.WORLD_SCALE + 0.7)
 	var at := car + CHASE_OFFSET
@@ -218,17 +233,38 @@ func _present_chase_camera(delta: float, snap: bool) -> void:
 	_chase_position = _clear_chase_terrain(_chase_position, anchor)
 	world_camera.position = _chase_position
 	world_camera.look_at(_chase_target, Vector3.UP)
+	_frame_chase_car()
+
+
+func _frame_chase_car() -> void:
+	var bounds := world.car.local_bounds()
+	var minimum := Vector2(INF, INF)
+	var maximum := Vector2(-INF, -INF)
+	for index in 8:
+		var point := world_camera.to_local(world.car.to_global(bounds.get_endpoint(index)))
+		var angles := Vector2(atan2(point.x, -point.z), atan2(point.y, -point.z))
+		minimum = minimum.min(angles)
+		maximum = maximum.max(angles)
+	var tangent := tan(deg_to_rad(world_camera.fov * 0.5)) * 0.92
+	var limit := Vector2(atan(tangent * size.x / maxf(size.y, 1.0)), atan(tangent))
+	var correction := Vector2(
+		clampf(0.0, maximum.x - limit.x, minimum.x + limit.x),
+		clampf(0.0, maximum.y - limit.y, minimum.y + limit.y),
+	)
+	# Crest look-ahead must not aim above a longer or more steeply pitched car.
+	var direction := Vector3(tan(correction.x), tan(correction.y), -1)
+	world_camera.look_at(world_camera.position + world_camera.basis * direction, Vector3.UP)
 
 
 func _clear_chase_terrain(at: Vector3, anchor: Vector3) -> Vector3:
-	var ground := Course.ground_height(at.x / Art.WORLD_SCALE)
+	var ground := course.ground_height(at.x / Art.WORLD_SCALE)
 	if is_finite(ground):
 		at.y = maxf(at.y, (Art.HEIGHT_ORIGIN - ground) * Art.WORLD_SCALE + CAMERA_CLEARANCE)
 	var span := at.x - anchor.x
 	if absf(span) < 0.001:
 		return at
 	# The road is piecewise linear: endpoints and crests bound the entire sight line.
-	for road: Array in Course.ROADS:
+	for road: Array in course.roads:
 		for point: Vector2 in road:
 			var vertex := Art.world_point(point)
 			var along := (vertex.x - anchor.x) / span
@@ -373,12 +409,12 @@ func _draw_overlay() -> void:
 	_overlay.draw_line(Vector2(left, y), Vector2(left + width, y),
 		Color("203834", 0.85), 4 * unit)
 	for index in 5:
-		var x := left + Course.PLUG_X[index] / Course.FINISH_X * width
+		var x := left + course.plug_x[index] / course.finish_x * width
 		_overlay.draw_circle(Vector2(x, y), 6 * unit,
 			Art.CREAM if state.collected[index] else Art.INK)
 		if state.collected[index]:
 			_overlay.draw_circle(Vector2(x, y), 2 * unit, Art.INK)
-	var progress := clampf(state.position.x / Course.FINISH_X, 0.0, 1.0)
+	var progress := clampf(state.position.x / course.finish_x, 0.0, 1.0)
 	var marker := Vector2(left + progress * width, y - 9 * unit)
 	_overlay.draw_colored_polygon(PackedVector2Array([
 		marker, marker + Vector2(-7, -10) * unit, marker + Vector2(7, -10) * unit,
@@ -389,7 +425,7 @@ func _draw_overlay() -> void:
 
 func _draw_parking_hint() -> void:
 	_parking_hint_bounds = Rect2()
-	if state.position.x < Course.FINISH_X - 700.0 or state.crash_wait > 0.0 or state.failed:
+	if state.position.x < course.finish_x - 700.0 or state.crash_wait > 0.0 or state.failed:
 		return
 	var parking := world.parking_target()
 	if camera_mode != CameraMode.SIDE:

@@ -17,8 +17,10 @@ const Game = preload("res://games/cube_trials/game.gd")
 const Daylight = preload("res://games/cube_trials/world/daylight.gd")
 const View = preload("res://games/cube_trials/course_view.gd")
 const Driver = preload("res://games/cube_trials/tests/driver_fixture.gd")
+const Profiles = preload("res://games/cube_trials/vehicle_profiles.gd")
 
 var _failures := PackedStringArray()
+var _course := Course.new()
 
 
 func _initialize() -> void:
@@ -37,6 +39,7 @@ func _run() -> void:
 	_test_impact_animation()
 	_test_brake_animation()
 	_test_camera_modes()
+	_test_flip_framing()
 	_test_daylight()
 	_test_automatic_headlights()
 	_test_terrain_and_accessibility()
@@ -252,7 +255,7 @@ func _test_damage_variants() -> void:
 		var front := car.chassis.get_node("HeadlightsAndIndicators") as MeshInstance3D
 		var bulb := front.get_active_material(int(car.get("_headlight_surface"))) as StandardMaterial3D
 		_expect(is_equal_approx(brake.emission_energy_multiplier, Cube.BRAKE_EMISSION)
-			and is_equal_approx(bulb.emission_energy_multiplier, 2.0)
+			and is_equal_approx(bulb.emission_energy_multiplier, Cube.HEADLIGHT_EMISSION)
 			and car.headlights[0].visible,
 			"Stage changes and repainting must preserve live brake and headlight emission.")
 		var points: Dictionary = (car.get("_damage_points") as Array)[stage]
@@ -269,7 +272,7 @@ func _test_damage_variants() -> void:
 		< pristine_bounds.end.y - 0.10,
 		"The battered roof must visibly lose height, not leave pristine glass floating above it.")
 	_expect((other.chassis.get_node("BrownBodywork") as MeshInstance3D).mesh == pristine
-		and other.damage_stage == 0 and _overrides(other).is_empty(),
+		and other.damage_stage == 0 and _finish_overrides(other).is_empty(),
 		"Damage and repainting must not mutate another car or its shared imported resources.")
 	car.apply_state(State.new())
 	_expect((car.chassis.get_node("BrownBodywork") as MeshInstance3D).mesh == pristine
@@ -298,7 +301,7 @@ func _test_stock_stance() -> void:
 	var paint := car.get_node("Chassis/BrownBodywork") as MeshInstance3D
 	var body_bounds := paint.global_transform * paint.mesh.get_aabb()
 	var floor_height := Art.world_point(Vector2(state.position.x,
-		Course.ground_height(state.position.x))).y
+		_course.ground_height(state.position.x))).y
 	var clearance := body_bounds.position.y - floor_height
 	_expect(clearance > 0.20 and clearance < 0.25,
 		"The body must sit about 23 cm off the road, not float over extended suspension.")
@@ -342,14 +345,15 @@ func _check_wheel_droop(car: Cube, state: State, reduced := false) -> float:
 	for index in 2:
 		var offset := car.axles[index].global_position - Art.world_point(state.wheel_centers[index])
 		var extension := offset.dot(direction)
+		# Global subtraction on the longer course loses a few float32 ULPs.
 		_expect(extension >= -0.0001 and extension <= Cube.AIRBORNE_WHEEL_DROP + 0.0001
-			and extension <= 0.18 and offset.is_equal_approx(direction * extension),
+			and extension <= 0.18 and offset.distance_to(direction * extension) < 0.0001,
 			"Visual wheel droop must be slight and follow chassis pitch, never widen the track.")
 		if reduced or not state.is_airborne():
 			_expect(offset.is_zero_approx(),
 				"Ground contact, reduced motion, recovery and results must retain exact physics hubs.")
 		elif extension > 0.001:
-			var hit := Course.wheel_contact(state.wheel_centers[index], down,
+			var hit := _course.wheel_contact(state.wheel_centers[index], down,
 				Cube.AIRBORNE_WHEEL_DROP / Art.WORLD_SCALE, State.WHEEL_RADIUS)
 			_expect(hit.is_empty() or extension <= maxf(0.0, float(hit["length"])) \
 				* Art.WORLD_SCALE + 0.0001,
@@ -877,11 +881,43 @@ func _chase_sightline_clear(view: View) -> bool:
 	var anchor := Art.world_point(view.state.position) + Vector3(0, 0.3, 0)
 	for sample in range(1, 33):
 		var point := anchor.lerp(at, sample / 32.0)
-		var ground := Course.ground_height(point.x / Art.WORLD_SCALE)
+		var ground := _course.ground_height(point.x / Art.WORLD_SCALE)
 		if is_finite(ground) and point.y < (Art.HEIGHT_ORIGIN - ground) * Art.WORLD_SCALE \
 			+ View.CAMERA_CLEARANCE - 0.001:
 			return false
 	return true
+
+
+func _test_flip_framing() -> void:
+	var view := View.new()
+	get_root().add_child(view)
+	view.set_day_night_enabled(false)
+	for id in [Profiles.CUBE, Profiles.SONATA, Profiles.CRV]:
+		for dimensions in [Vector2(1280, 600), Vector2(390, 620), Vector2(2560, 520)]:
+			view.size = dimensions
+			for reduced: bool in [false, true]:
+				var state := State.new(id)
+				state.checkpoint = Course.CHECKPOINT_X.size() - 1
+				state.recover()
+				state.advance(0.5, 0.0, 0.0, 0.0)
+				view.configure(state)
+				view.set_reduced_motion(reduced)
+				var visible := Rect2(Vector2.ZERO, view.size).grow(-12.0)
+				var in_frame := true
+				for frame in 120:
+					var tilt := -1.0 if reduced else 1.0
+					if frame < 10 or frame >= 60:
+						tilt = 0.0
+					state.advance(1.0 / 60.0, 0.0, 0.0, tilt, frame == 0)
+					for event in state.take_events():
+						if event["kind"] == "jump":
+							view.world.car.play_jump()
+					view.present(1.0 / 60.0)
+					in_frame = in_frame and visible.encloses(view.car_screen_bounds())
+				_expect(in_frame and state.landed_flips == 1 and state.lives_left == 5,
+					"%s: takeoff, every flip angle and landing must fit at the mountain summit "
+					% id + "in %s, reduced motion %s." % [dimensions, reduced])
+	view.free()
 
 
 func _test_daylight() -> void:
@@ -958,8 +994,8 @@ func _test_automatic_headlights() -> void:
 		"Headlights must not alter car geometry, another car, or shared exported materials.")
 	car.apply_state(state)
 	_expect(not car.headlights[0].visible and not car.headlights[1].visible
-		and lenses.get_surface_override_material(surface) == null,
-		"Daylight and replay must turn off the beams and restore the exported bulb finish.")
+		and is_equal_approx(lit.emission_energy_multiplier, Cube.RUNNING_EMISSION),
+		"Daylight and replay must turn off the beams while retaining faint running lamps.")
 	car.free()
 	other.free()
 
@@ -972,7 +1008,7 @@ func _test_parking_and_night() -> void:
 	var glow := outline.material_override as ShaderMaterial
 	var bounds := outline.global_transform * outline.mesh.get_aabb()
 	var ground := Art.world_point(Vector2(Course.FINISH_X,
-		Course.ground_height(Course.FINISH_X)))
+		_course.ground_height(Course.FINISH_X)))
 	_expect(is_equal_approx(bounds.position.x, Course.FINISH_X * Art.WORLD_SCALE)
 		and is_equal_approx(bounds.end.x,
 			(Course.FINISH_X + Course.FINISH_WIDTH) * Art.WORLD_SCALE)
@@ -1047,23 +1083,23 @@ func _test_terrain_and_accessibility() -> void:
 	var pools := world.get_node("QuarryWater") as Node3D
 	var ripples := world.get_node("QuietWaterRipples") as Node3D
 	var clouds := world.get_node("SlowDriftingClouds") as Node3D
-	_expect(pools.get_child_count() == Course.gap_intervals().size()
+	_expect(pools.get_child_count() == _course.gap_intervals().size()
 		and ripples.get_child_count() == pools.get_child_count() and clouds.get_child_count() > 8,
 		"Water, ripples and clouds must extend along the route in locally culled groups.")
 	for group in [pools, ripples, clouds]:
 		for mesh: MeshInstance3D in group.get_children():
-			_expect(mesh.mesh.get_aabb().size.x < 20.0,
-				"An ambient batch must not stretch across the whole doubled course.")
+			_expect(mesh.mesh.get_aabb().size.x < 22.0,
+				"Ambient batches must stay local, including the summit's 21.5-meter pool and banks.")
 	var road := world.get_node("ExactDrivingSurface") as MeshInstance3D
 	var faces := road.mesh.get_faces()
 	for offset in range(0, faces.size(), 3):
 		var center := (faces[offset] + faces[offset + 1] + faces[offset + 2]) / 3.0
-		for gap in Course.gap_intervals():
+		for gap in _course.gap_intervals():
 			_expect(not (center.x > gap.x * Art.WORLD_SCALE and center.x < gap.y * Art.WORLD_SCALE),
-				"The 3D driving surface must not bridge any of the four physics gaps.")
+				"The 3D driving surface must not bridge any of the six physics gaps.")
 		for index in 3:
 			var vertex := faces[offset + index]
-			var height := Course.ground_height(vertex.x / Art.WORLD_SCALE)
+			var height := _course.ground_height(vertex.x / Art.WORLD_SCALE)
 			_expect(is_finite(height) and absf(
 				vertex.y - (Art.HEIGHT_ORIGIN - height) * Art.WORLD_SCALE
 			) < 0.03, "Visible road geometry must agree with the collision profile.")
@@ -1080,7 +1116,7 @@ func _test_terrain_and_accessibility() -> void:
 		_expect(is_equal_approx(bounds.size.y, Landscape.PLUG_HEIGHT)
 			and absf(bounds.get_center().y) < 0.0001
 			and world.plugs[index].position.is_equal_approx(
-				Art.world_point(Course.plug_position(index))),
+				Art.world_point(_course.plug_position(index))),
 			"The imported plug must be enlarged and centered on the existing pickup anchor.")
 		_expect(world.plugs[index].get_node("PickupRing") is MeshInstance3D
 			and (world.plugs[index].get_node("PickupNumber") as Label3D).text == str(index + 1),
@@ -1101,7 +1137,7 @@ func _test_terrain_and_accessibility() -> void:
 		"The replacement garage must mark the real finish interval, not its extra parking stalls.")
 	var shop := garage.get_node("ImportedBodyShop") as Node3D
 	var apron := shop.to_global(Vector3(0, 0.16, 0))
-	var ground := Art.world_point(Vector2(Course.FINISH_X, Course.ground_height(Course.FINISH_X)))
+	var ground := Art.world_point(Vector2(Course.FINISH_X, _course.ground_height(Course.FINISH_X)))
 	_expect(apron.y > ground.y and apron.y - ground.y < 0.02,
 		"The imported apron must clear z-fighting without floating above the driving surface.")
 	var facade := shop.to_global(Vector3(0, 1, 4.0))
@@ -1132,7 +1168,7 @@ func _test_terrain_and_accessibility() -> void:
 	state.collected[0] = true
 	state.checkpoint = 1
 	state.velocity.x = 200
-	world.present(state, 2.5, false, true, false)
+	world.present(state, 2.5, false, true, false, 1.0 / 60.0)
 	_expect(not world.plugs[0].visible and world.plugs[1].visible,
 		"Only collected 3D spark plugs may disappear.")
 	_expect(world.checkpoint_labels[0].text.contains("SAVED"),
@@ -1162,7 +1198,7 @@ func _test_terrain_and_accessibility() -> void:
 	_expect(dust.multimesh.visible_instance_count == 0
 		and clouds.position == Vector3.ZERO and ripples.position == Vector3.ZERO
 		and world.plugs[1].rotation == Vector3.ZERO
-		and world.plugs[1].position.is_equal_approx(Art.world_point(Course.plug_position(1)))
+		and world.plugs[1].position.is_equal_approx(Art.world_point(_course.plug_position(1)))
 		and world.checkpoint_flags[0].rotation.is_zero_approx()
 		and world.checkpoint_flags[1].rotation.is_zero_approx(),
 		"Reduced motion must clear dust and park imported pickup bob/spin and flag sway.")
@@ -1205,8 +1241,16 @@ func _test_gallery_exhibits() -> void:
 	_expect(manifest.gallery_exhibits == Options.GALLERY_EXHIBITS,
 		"The manifest must exhibit the list the game owns, not a second copy.")
 	var stage := GalleryStage.new()
+	var ids: Array[String] = []
 	for exhibit: Dictionary in Options.GALLERY_EXHIBITS:
 		var id := str(exhibit["id"])
+		_expect(not ids.has(id), "Gallery exhibit ids must be unique: " + id)
+		ids.append(id)
+		if id in [Options.EXHIBIT_SONATA, Options.EXHIBIT_CRV]:
+			var requirement := Course.COPPER_COMPLETE if id == Options.EXHIBIT_SONATA \
+				else Course.SUNSET_COMPLETE
+			_expect(str(exhibit.get("requires_achievement", "")) == requirement,
+				"Gallery cars must use the same completion gates as playable cars.")
 		_expect(GalleryStage.FRAMING.has(id),
 			"The gallery stage must know where to open '%s' from." % id)
 		var model: Node3D = stage.call("build_exhibit", id)
@@ -1219,10 +1263,38 @@ func _test_gallery_exhibits() -> void:
 		_expect(model.find_children("*", "MeshInstance3D", true, false).size() > 0,
 			"Exhibit '%s' must be built from real geometry." % id)
 		model.free()
+	_expect(ids.has(Options.EXHIBIT_SONATA) and ids.has(Options.EXHIBIT_CRV),
+		"Both saved reference cars must appear in the game's Gallery catalogue.")
 	_expect(stage.call("build_exhibit", "not_an_exhibit") == null,
 		"The gallery stage must not invent a model for an id it does not know.")
 	_test_gallery_provenance(stage)
+	_test_gallery_reference_cars(stage)
 	stage.free()
+
+
+func _test_gallery_reference_cars(stage: GalleryStage) -> void:
+	for sample: Dictionary in [
+		{"id": Options.EXHIBIT_SONATA, "asset": GalleryStage.SONATA_MODEL,
+			"assembly": ^"HyundaiSonata"},
+		{"id": Options.EXHIBIT_CRV, "asset": GalleryStage.CRV_MODEL,
+			"assembly": ^"HondaCRV"},
+	]:
+		var asset: PackedScene = sample["asset"]
+		var model := stage.build_exhibit(sample["id"])
+		_expect(model != null, "A reference-car exhibit must instantiate its saved model.")
+		if model == null:
+			continue
+		var source := asset.instantiate() as Node3D
+		_expect(model.scene_file_path == asset.resource_path and model.has_node(sample["assembly"]),
+			"Each reference car must use its own GLB, not a reskinned Cube.")
+		_expect(model.transform.is_equal_approx(source.transform)
+			and GalleryStage.bounds_of(model).is_equal_approx(GalleryStage.bounds_of(source)),
+			"The Gallery must preserve the reference car's authored scale and orientation.")
+		_expect(model.find_children("*", "MeshInstance3D", true, false).size() == 16,
+			"A reference-car exhibit must retain the complete 16-mesh export.")
+		_compare_imported_meshes(model, source)
+		source.free()
+		model.free()
 
 
 ## The point of the room: what stands on the plinth is the model the match
@@ -1336,18 +1408,20 @@ func _compare_prop_import(
 		and driven.scene_file_path == asset.resource_path,
 		"Course and gallery must instance the actual generated GLB, not a procedural stand-in.")
 	var source := asset.instantiate() as Node3D
+	_compare_imported_meshes(displayed, source)
+	_compare_imported_meshes(driven, source)
+	source.free()
+
+
+func _compare_imported_meshes(displayed: Node3D, source: Node3D) -> void:
 	for part: MeshInstance3D in source.find_children("*", "MeshInstance3D", true, false):
 		var path := source.get_path_to(part)
 		var shown := displayed.get_node_or_null(path) as MeshInstance3D
-		var live := driven.get_node_or_null(path) as MeshInstance3D
-		_expect(shown != null and live != null,
-			"An imported prop lost its mesh group: " + str(path))
-		if shown == null or live == null:
+		_expect(shown != null, "An imported model lost its mesh group: " + str(path))
+		if shown == null:
 			continue
-		_expect(shown.mesh == part.mesh and live.mesh == part.mesh
-			and shown.material_override == null and live.material_override == null,
-			"Every prop must use the exported geometry and materials on both surfaces.")
-	source.free()
+		_expect(shown.mesh == part.mesh and shown.material_override == null,
+			"Every imported model must use its exported geometry and materials.")
 
 
 ## The shop sells looks, not advantages, and it repaints the imported car
@@ -1377,7 +1451,7 @@ func _test_store_finishes() -> void:
 			found = found or (material != null and material.resource_name == surface_name)
 		_expect(found, "The export must still batch a '%s' surface to paint." % surface_name)
 
-	# The two free cards quote `cube_finish.gd` for their swatch instead of
+	# Factory cards quote `cube_finish.gd` for their swatch instead of
 	# repeating a hex code, so what it quotes has to be what Blender wrote.
 	for quoted: Array in [
 		[body, Finish.BODY_COAT, Finish.FACTORY_COAT],
@@ -1395,32 +1469,49 @@ func _test_store_finishes() -> void:
 				% [surface_name, declared.to_html(false),
 				material.albedo_color.to_html(false)])
 
-	# The free looks are the exported materials themselves, not a copy: a
-	# factory car must carry no override at all.
+	# Factory finishes use the exported paint/alloys; lamp overrides are independent.
 	reference.set_finish(Options.PAINT_FACTORY, Options.RIM_FACTORY)
-	_expect(_overrides(reference).is_empty(),
+	_expect(_finish_overrides(reference).is_empty(),
 		"The factory look must leave the exported materials untouched.")
 
-	var stance := reference.local_bounds()
+	var references := {Profiles.CUBE: reference}
+	var stances := {Profiles.CUBE: reference.local_bounds()}
+	for vehicle_id: String in [Profiles.SONATA, Profiles.CRV]:
+		var car := Cube.new(vehicle_id)
+		get_root().add_child(car)
+		references[vehicle_id] = car
+		stances[vehicle_id] = car.local_bounds()
+		var panel := car.chassis.get_node(car.vehicle.body_part) as MeshInstance3D
+		var found := false
+		for surface in panel.mesh.get_surface_count():
+			var material := panel.mesh.surface_get_material(surface) as StandardMaterial3D
+			if material.resource_name == Finish.MODERN_BODY_COAT:
+				found = true
+				_expect(material.albedo_color.to_html(false)
+					== Finish.FACTORY_COATS[vehicle_id].to_html(false),
+					vehicle_id + ": the factory card must quote this car's exported paint.")
+		_expect(found, vehicle_id + ": the export must retain its named body-paint material.")
 	var every_id := PackedStringArray()
 	for item: Dictionary in Options.STORE_ITEMS:
 		var id := str(item["id"])
 		every_id.append(id)
-		var paint := id if str(item["kind"]) == Options.PAINT_KIND else ""
-		var wheels := id if str(item["kind"]) == Options.RIM_KIND else ""
-		reference.set_finish(paint, wheels)
-		var painted := _overrides(reference)
+		var is_wheel := str(item["kind"]) == Options.RIM_KIND
+		var vehicle_id := Profiles.CUBE if is_wheel \
+			else str(Options.PAINT_KINDS.find_key(str(item["kind"])))
+		var car: Cube = references[vehicle_id]
+		car.set_finish("" if is_wheel else id, id if is_wheel else "")
+		var painted := _finish_overrides(car)
 		# One bodywork batch, but four wheels: a wheel finish is bought once
 		# and worn on every corner.
-		var wearers := 4 if str(item["kind"]) == Options.RIM_KIND else 1
+		var surfaces := 8 if is_wheel else (2 if vehicle_id == Profiles.CUBE else 1)
 		if Finish.repaints(id):
-			_expect(painted.size() == 2 * wearers and painted.has(Finish.swatch(id)),
-				"'%s' must restate two surfaces on each of its %d wearers."
-				% [id, wearers])
+			_expect(painted.size() == surfaces and painted.has(Finish.swatch(id)),
+				"'%s' must restate its %d authored paint surfaces on the correct car."
+				% [id, surfaces])
 		else:
 			_expect(painted.is_empty(),
 				"Free look '%s' must not override an exported material." % id)
-		_expect(reference.local_bounds().size.is_equal_approx(stance.size),
+		_expect(car.local_bounds().size.is_equal_approx((stances[vehicle_id] as AABB).size),
 			"'%s' must not change the shape of the car." % id)
 
 	# Every colour sold has to exist, and every colour that exists has to be
@@ -1428,8 +1519,8 @@ func _test_store_finishes() -> void:
 	for id: String in Finish.PAINTS.keys() + Finish.RIMS.keys():
 		_expect(every_id.has(id), "cube_finish.gd mixes '%s', which nothing sells." % id)
 	reference.set_finish()
-	_expect(_overrides(reference).is_empty(),
-		"Stripping a car back to factory must clear every override.")
+	_expect(_finish_overrides(reference).is_empty(),
+		"Stripping a car back to factory must clear every paint and alloy override.")
 	var reversed := ArrayMesh.new()
 	for surface in range(body.mesh.get_surface_count() - 1, -1, -1):
 		reversed.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,
@@ -1448,7 +1539,8 @@ func _test_store_finishes() -> void:
 			.albedo_color.is_equal_approx(expected),
 			"Cached finishes must follow material identity even when damage exports reorder surfaces.")
 	reordered.free()
-	reference.free()
+	for car: Cube in references.values():
+		car.free()
 
 	# The wheel a rim card shows is the imported alloy, wearing that finish.
 	var wheel := Cube.wheel_display(Options.RIM_BLACK)
@@ -1459,16 +1551,10 @@ func _test_store_finishes() -> void:
 	wheel.free()
 
 
-## Every albedo the car is currently overriding, so a test can ask what a
-## finish changed without knowing which surface index it landed on.
-func _overrides(car: Cube) -> Array[Color]:
-	var colors: Array[Color] = []
-	for node in car.find_children("*", "MeshInstance3D", true, false):
-		var instance := node as MeshInstance3D
-		for surface in instance.mesh.get_surface_count():
-			var material := instance.get_surface_override_material(surface)
-			if material is StandardMaterial3D:
-				colors.append((material as StandardMaterial3D).albedo_color)
+func _finish_overrides(car: Cube) -> Array[Color]:
+	var colors := _surface_colors(car.chassis.get_node(car.vehicle.body_part) as MeshInstance3D)
+	for wheel in car.wheels:
+		colors.append_array(_surface_colors(wheel.get_node("AlloyRims") as MeshInstance3D))
 	return colors
 
 
