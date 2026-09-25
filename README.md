@@ -13,10 +13,22 @@ The terrain spans **900 vertical units**, up from 240, and higher jumps leave
 room to earn points with landed frontflips and backflips.
 
 Start in the **Nissan Cube**, then earn the **Hyundai Sonata** and **Honda CR-V**
-by completing levels. Choose an unlocked level and car in the shared
+by completing levels. Freeing all three opens the **Trail Builder**, where you
+build a trail of your own from picture blocks and drive it. Choose an unlocked
+level and car in the shared
 setup screen. Play solo, or take complete turns with **two or
 three local players**: P1, then P2, then P3. This is hot-seat play, not
 simultaneous driving or split-screen.
+
+## Story
+
+The valley has run out of spark plugs, and one by one its cars have fallen
+silent. To keep them safe, the garages locked the stalled cars away behind
+roll-up doors and iron bars. Only a brown Nissan Cube still runs, carrying a
+crate of spark plugs. Every garage needs five. The first delivery to Copper
+Creek's garage frees the Hyundai Sonata, and the first to Sunset Ridge's frees
+the Honda CR-V. The boot intro tells the story in four short cards, and the
+game's description repeats it.
 
 ## This repository
 
@@ -44,11 +56,14 @@ in the collection requires.
 game.gd                    # GameManifest: title, copy, theme, achievements, credits
 cube_trials_options.gd     # constants-only tunables and rebindable actions
 gameplay.gd / .tscn        # round logic on top of the shared GameShell
-intro.tscn                 # shared boot intro
+intro.tscn                 # shared boot intro and its four story cards
 trial_state.gd             # 120 Hz suspension, jumps, airborne tricks and banked scoring
 vehicle_tuning.gd          # shared driving tuning and original Cube dimensions
 vehicle_profiles.gd        # roster, authored dimensions, contacts, materials and driver eyes
-course.gd                  # three routes, unlock milestones, terrain, pickups and checkpoints
+course.gd                  # three routes, the built trail, unlock milestones, terrain, pickups and checkpoints
+trail_layout.gd            # Trail Builder model: blocks, drivability rules, undo, save and route data
+trail_canvas.gd            # the builder's picture of a trail: tap to pick, drag or wheel to scroll
+trail_editor.gd            # the picture-only Trail Builder screen over the gameplay scene
 course_view.gd             # isolated SubViewport, Side/Chase/Cockpit cameras and scenery blur
 drive_controls.gd          # keyboard, gamepad and multitouch input
 trial_hud.gd               # level and driver/car identity, lives, points, pickups and timer
@@ -57,8 +72,9 @@ cube_art.gd                # palette and lighting entry point shared by every re
 share_art.gd / .tscn       # score-share portrait in its own 3D studio viewport
 gallery_stage.gd / .tscn   # turntable for the shared Gallery screen's plinths
 store_preview.gd / .tscn   # the car or wheel on a shared Store screen card
-character_preview.gd / .tscn # selected car and player paint in the shared setup
+character_preview.gd / .tscn # selected car and player paint, framed close for the setup plinth
 world/copper_creek.gd      # selected-route terrain, shared prop factories and live feedback
+world/garage_reveal.gd     # locked car, roll-up door, iron bars and the freeing reveal
 world/daylight.gd          # shared sun/sky rig and the optional day/night cycle
 world/cube_model.gd        # imported car, staged damage, suspension and working lights
 world/tire_particles.gd    # bounded contact dust, snow powder, dirt clods and landing puffs
@@ -67,9 +83,10 @@ world/cube_finish.gd       # what each bought paint and wheel finish looks like
 world/nissan_cube.tscn     # reusable stock-proportion car using the same adapter
 world/mesh_builder.gd      # batches original geometry into lit surfaces
 assets/                    # generated icon/art, plus video/tutorial.ogv and its poster
+assets/levels/             # generated route and Trail Builder stills for the shared setup's level row
 assets/models/             # portable car and reference-prop GLBs, plus Godot import settings
 assets/shaders/            # scenery-only speed blur, parking outline and frosted foliage
-tests/                     # twelve suites plus input-only driver and controller fixtures
+tests/                     # thirteen suites plus input-only driver and controller fixtures
 tools/capture_art.gd       # dev-only art capture; excluded from exports
 tools/reference/           # dev-only modeling reference; see its README
 tools/blender/             # editable reference-based car/props, generators and studio views
@@ -89,8 +106,9 @@ godot --path . -- --game=all            # the full collection
 | Level | Route | Available after | Completion reward |
 | --- | --- | --- | --- |
 | 1 | Copper Creek | Available from the start with the Nissan Cube | Level 2 and Hyundai Sonata |
-| 2 | Sunset Ridge | Complete Level 1 | Level 3 and Honda CR-V |
+| 2 | Sunset Ridge | Complete Level 1 | Level 3, Honda CR-V and the Trail Builder |
 | 3 | Alpine Pass | Complete Level 2 | Top of the Commute achievement |
+| — | Trail Builder | Complete Level 2, freeing the last car | None: built trails are just for fun |
 
 **Sunset Ridge (Level 2)** is a 14,020-unit beach route with four real gaps and
 four checkpoint flags. Sandy trails and coastal dunes overlook a turquoise
@@ -113,11 +131,96 @@ the existing achievements profile. An older save with **Home in One Piece**
 already opens Level 2 and the Sonata; it does not skip Level 2 to unlock Level 3.
 The corresponding Gallery cars follow the same gates.
 
+Until its car is freed, the finish garages on Levels 1 and 2 stay shut behind a
+roll-up door signed with the waiting car's name. The shut door is a single
+shadowless mesh plus its sign, and the car behind it is not drawn. The delivery
+that unlocks the car plays a short garage scene before the results, framed by a
+fixed three-quarter camera:
+
+1. The door rattles up.
+2. The iron bars sink into the floor.
+3. The freed car blinks its headlights awake, beeps, flashes its hazards and
+   hops for joy under floating hearts.
+
+Your own car and the parking outline step out of the shot for the scene. The
+unlock is saved before the scene starts. Its fanfare, announcement, screen
+flash, confetti and captions wait until the scene ends, then the results open
+over the freed car. Replays, failed or abandoned runs and Level 3 go straight to
+the results. In hot seat, the scene plays once, after the final player's turn.
+
 Unlocked cars can be used on **any unlocked level**, including earlier courses.
 **Play Again** keeps the level and chosen cars; **Levels & cars** on the results
 screen returns to setup. In hot seat, everyone drives the same selected level.
 Any finisher earns its unlock after the final player's turn; leaving before
 the roster finishes grants no new progression.
+
+## Trail Builder
+
+Completing Level 2 frees the CR-V, the last car, and opens the **Trail Builder**,
+the fourth entry in the setup screen's level row with its own still
+(`assets/levels/my_trail.png`). Until then it is listed greyed out, and its
+tooltip says how to open it. Choosing it opens the builder instead of a drive,
+in any unlocked car, solo or in hot seat. It is made for players who may not
+read yet: every control is a picture, every edit shows on the trail at once,
+and words live only in tooltips and screen-reader names.
+
+| Where | Picture | Does |
+| --- | --- | --- |
+| Top left | Pause | Opens the pause menu, as the Pause key does |
+| Top | Pine, palm, snowflake | Mountain, beach or snow scenery, as on Levels 1–3 |
+| Top right | Curved arrow, bin, page with a plus | Undo a change, remove the picked block, start a new trail |
+| Top right | Wide green play button | Drive the trail |
+| Middle | The trail | The car on its start pad, every block, plug and flag, then the garage |
+| Bottom | Seven pieces | Flat road, ramp up, ramp down, hill, dip, gap and checkpoint flag |
+
+Tap a piece to add it straight after the glowing, picked block, where a gold
+**+** waits. The new block becomes the pick, so tapping pieces one after
+another builds the trail from left to right. Tap any block, or the start pad,
+to pick it. Drag, the mouse wheel or the arrow buttons scroll a long trail.
+**New** needs a second tap: the first turns it into a tick on red, which clears the
+trail if tapped again within three seconds, and **Undo** still brings it back.
+Undo steps back through the last 50 changes, including scenery. On a keyboard,
+focus starts on **Play**, Left and Right move the pick while the trail has
+focus, Ctrl+Z undoes and Delete or Backspace removes the picked block. On a
+narrow phone the undo, remove and new buttons move to a row of their own.
+
+The builder shows its rules instead of explaining them, so every trail can be
+driven at full throttle. A piece that cannot go after the pick is greyed out:
+
+- a trail holds up to 64 blocks, and its road stays between three steps below
+  the start and nine above;
+- a gap needs flat road right before it and two blocks of level road, flat or a
+  flag, after it to land on;
+- two gaps in a row make a long jump, which needs two blocks of full-speed road
+  (flat, ramp down or a flag) before it; a third never fits;
+- a ramp down cannot follow a dip, whose sharp crest would strand the long Sonata.
+
+Removing or undoing a block can leave a later piece that no longer fits, such as
+a gap whose flat run-up has gone. That piece is kept but built, and drawn, flat
+until the trail around it lets it fit again. Hills and dips are gentle bumps.
+The five numbered plugs are placed for you, spread along the road and clear of
+every takeoff and landing. Checkpoint flags go wherever you put them, and the
+garage always waits at the end with room to park. It holds no car to free.
+
+**Play** drives the trail in the chosen car with the usual HUD, lives,
+checkpoints and recoveries. During a solo drive, the HUD's **Build** button,
+three stacked blocks, stops it without results and goes back to the builder.
+The results offer **Build** right after **Play Again**, which drives the same
+trail again. In hot seat everyone drives the same trail, and Build waits for the
+results after the final turn. Built trails are just for fun: they pay no Sparks,
+earn no achievements or progress, and the results say so. The results and share
+card call it **My Trail**. The drive's 3D view stops drawing while the builder
+is open.
+
+Every edit, including the scenery, is saved straight away to
+`user://cube_trials_trail.cfg`, so the trail is waiting next time. A first visit,
+or a missing or damaged file, starts from a sample trail that uses every piece.
+The shared **Saves** screen lists the file as **My Trail**, so it is backed up,
+restored and deleted with the rest of the game's progress. Every builder button
+is at least a 44-physical-pixel touch target, on desktop and on phones down to
+320 pixels wide, including at a larger UI scale. **Reduced motion** stops new
+blocks rising into place, the **+** pulsing and the trail gliding as it
+scrolls.
 
 ## Cars and local hot seat
 
@@ -566,6 +669,15 @@ pulse, but keeps the
 solid outline, written instructions and essential night lighting. Every
 meaningful sound also has visible feedback and an audio caption.
 
+The garage reveal has a 44-pixel **Skip** button. After a short grace, Space,
+Enter, Jump or gamepad A also skip it, so a key still held from parking cannot.
+Skipping lands on the freed car. Pause still opens the menu and freezes the
+scene. Reduced motion shortens it from 7.4 to 4 seconds of instant steps: the
+door opens at once, the bars drop at once, and the car wakes without hopping.
+Switching mid-scene keeps its place. With reduced motion or intense effects
+off, three still hearts replace the floating ones. The door, the bars and the
+horn each have a caption.
+
 ## Tests
 
 Run from `godot-base`, sequentially, using a fresh isolated user profile for
@@ -581,22 +693,24 @@ godot --headless --path . --script res://games/cube_trials/tests/cube_trials_eff
 godot --headless --path . --script res://games/cube_trials/tests/reference_models_test.gd -- --game=cube_trials
 godot --headless --path . --script res://games/cube_trials/tests/cube_trials_multiplayer_test.gd -- --game=cube_trials
 godot --headless --path . --script res://games/cube_trials/tests/cube_trials_levels_test.gd -- --game=cube_trials
+godot --headless --path . --script res://games/cube_trials/tests/cube_trials_builder_test.gd -- --game=cube_trials
 godot --headless --path . --script res://games/cube_trials/tests/cube_trials_store_test.gd -- --game=cube_trials
 ```
 
 | Suite | Covers |
 | --- | --- |
 | `cube_trials_test.gd` | Fixed-step physics at 30/60/144 FPS; 225-240-unit jumps; input-only front/backflips for every car; exact airtime/angle thresholds, velocity scaling, non-stacking 1.15x hazards, pending/banked/crash/recovery and garage scoring; six real gaps, seven level checkpoints and a 900-unit terrain span; stock ride height, lives, damage and complete drives at both assist limits |
-| `cube_trials_scene_test.gd` | Icon counters, live rebinding, mouse and three-finger jumping, F/touch/gamepad X hazard toggles, key-repeat and pause gating, keyboard/touch flips with dynamic HUD and banked stats/share data, assigned/unassigned gamepads, braking, jump reset gating, day/night settings, damage/recovery/replay, assists, five-life loss, results and achievements |
+| `cube_trials_scene_test.gd` | Icon counters, live rebinding, mouse and three-finger jumping, F/touch/gamepad X hazard toggles, key-repeat and pause gating, keyboard/touch flips with dynamic HUD and banked stats/share data, assigned/unassigned gamepads, braking, jump reset gating, day/night settings, damage/recovery/replay, assists, five-life loss, the labeled shut door and the real finish's garage reveal (held celebration, focus release, skip grace, pause and resume, skip to results), results and achievements |
 | `cube_trials_3d_test.gd` | All five chassis variants, geometry budgets, finishes and instance isolation, helical coilover morphs and mount alignment, airborne wheel droop at 30/60/144 FPS with grounded/terrain-clearance checks, driving/takeoff/landing/impact animation, complete-route cameras, summit flip framing for every car and screen aspect with reduced motion, sun/sky transitions, lights, parking, props and all eleven Gallery exhibits |
 | `cube_trials_lights_test.gd` | All cars and damage stages, lit projectors, synchronized front/rear hazards, brake priority, per-car material isolation and steady accessibility signals; without `--headless`, actual brake/hazard pixels on desktop and phone across all biomes, stronger night lighting versus the old settings, damaged signals and draw budgets. Supports `--cube-capture-dir=...` |
 | `cube_trials_effects_test.gd` | Grounded tire emission, reverse, real landing puffs, biome palettes and bounded clods; all cars/damage stages and 30/60/144 FPS airborne hazard trails; pause, accessibility, recovery, replay, hot-seat and results cleanup. Without `--headless`, actual snow/dirt pixels and trails extending beyond the car on desktop/phone across camera views, plus draw budgets. Supports `--cube-capture-dir=...` |
 | `reference_models_test.gd` | All three cars and four prop GLBs: geometry budgets, finite unit normals, outward-facing plug threads, meter scale, grounded origins, car chassis/wheel hierarchies and pivot placement, two-sided foliage/cloth and texture-free Compatibility materials |
 | `cube_trials_multiplayer_test.gd` | Every playable car/damage stage, profile geometry, isolated player paint and factory restoration, clean input-only deliveries at both assist limits and 30/60/144 FPS, independent hot-seat runs and trick totals, release-gated handoffs, three-player stats/share/payout, ties, replay and solo selection |
-| `cube_trials_levels_test.gd` | **Fresh isolated profile required**: distinct terrain/garages, beach palms/ocean and snowy foliage/particles, biome lighting and accessibility, original Level 1 geometry, recovery and cameras on all routes; input-only new-level deliveries for all cars at 30/60/144 FPS and both assist limits; locked setup, real solo/hot-seat progression, failed/abandoned runs, save reloads, replay and level-aware results/share data |
+| `cube_trials_levels_test.gd` | **Fresh isolated profile required**: distinct terrain/garages, beach palms/ocean and snowy foliage/particles, biome lighting and accessibility, original Level 1 geometry, recovery and cameras on all routes; input-only new-level deliveries for all cars at 30/60/144 FPS and both assist limits; locked setup, real solo/hot-seat progression, failed/abandoned runs, save reloads, replay and level-aware results/share data; the Sonata and CR-V behind their labeled, single-mesh shut doors and no reveal on Level 3, the reveal's door/bars/wake order in both timings with and without intense effects, cues played once at their moments, Reduced motion mid-scene, skip and reset, and framing on desktop, phone and ultrawide views |
+| `cube_trials_builder_test.gd` | **Fresh isolated profile required**: the Trail Builder's rules restated independently and checked on hand-picked trails and 600 seeded random ones, built by edits or raw; adding, picking, removing, undo, clearing, limits and flattening; saving, saves with unknown or too many blocks, unreadable or missing files and the Saves screen entry; route data, terrain and scenery for all three sceneries, including trails without gaps; deliveries from every checkpoint for all cars by the input-only driver at 30 FPS and at full throttle at 60 FPS, with no recoveries; the unlock gate; the picture-only editor through real taps, drags, wheel and keys; 44-pixel layouts on desktop and phones; real solo and hot-seat drives that pay and award nothing; the HUD and results Build buttons, pause and Reduced motion |
 | `cube_trials_store_test.gd` | **Fresh isolated profile required**: independent car paints, unique palettes, exact 21x prices, legacy Cube purchases, car gates, shared wheels, saved selections, gameplay/replay/share application; a graphics run also checks first-open routed previews, factory/unowned colors, resizing, reduced motion and configuration before readiness |
 | `cube_trials_view_test.gd` | **Graphics window required** — see below |
-| `cube_trials_camera_test.gd` | **Graphics window required** — each car's three perspectives, cockpit visibility while jumping at every damage stage, full-course framing/budgets and forward-view night parking |
+| `cube_trials_camera_test.gd` | **Graphics window required** — each car's three perspectives, cockpit visibility while jumping at every damage stage, full-course framing/budgets (including the shut garage door on levels that hide a car) and forward-view night parking |
 | `cube_trials_multiplayer_view_test.gd` | **Graphics window required** — real shared setup/instructions routing, solo phone selection, three colored car previews, handoffs, all driver HUDs, results and a complete 1200x630 share image |
 
 `driver_fixture.gd` and `input_gameplay_fixture.gd` are helpers, not suites; skip `*_fixture.gd` when
@@ -639,7 +753,13 @@ nighttime car readability, and the portrait parking target with a minimum
 13-physical-pixel callout font. It also checks actual instanced tree transforms,
 imported Gallery framing and reference-car menu selection, orbit, zoom and reset across
 screen sizes and orbit angles, and the viewport's 200-draw / 120,000-triangle
-budget at the start, checkpoints, jump and workshop. Pass an optional
+budget at the start, checkpoints, jump, workshop and garage reveal. The
+rendered finish plays the Sonata's reveal: at desktop and phone sizes, the
+door, bars, hop and hearts stages must keep the freed car in shot, the hopping
+car must really render through the fog and bars, and **Skip** must be a legible
+44-pixel target that never covers the car. The results must then open over the
+freed car. A standalone Sunset Ridge view checks the heaviest shot, the CR-V
+behind its half-open door, at both sizes. Pass an optional
 `--cube-capture-dir=<absolute directory>` to save rendered examples.
 
 The camera suite accepts `--cube-vehicle=cube_car|cube_sonata|cube_crv`
@@ -654,12 +774,20 @@ locked choices, live unlocks, phone-sized level selection and the results-to-set
 ## Regenerating art
 
 The icon and original still artwork in `assets/` are captures of the actual meshes, not a
-second interpretation of the car. Regenerate them with a real graphics window,
-from `godot-base`:
+second interpretation of the car. The same run renders the
+`assets/levels/*.png` stills that the shared setup screen's level row and list
+show beside each route's title (`course.gd` names them as each level's `icon`).
+The three route stills are taken on the real course, without a car, because the
+car is chosen on the next row. The Trail Builder's `my_trail.png` is drawn by the
+builder itself, from a fixed example trail with its top row of buttons hidden.
+Regenerate them with a real graphics window, from `godot-base`:
 
 ```powershell
 godot --path . --script res://games/cube_trials/tools/capture_art.gd -- --game=cube_trials
 ```
+
+Append `--only=levels` after `--game=cube_trials` to refresh just the level
+stills, the Trail Builder's included, or `--only=builder` for only `my_trail.png`.
 
 `tools/` is development-only and is excluded from every export preset.
 

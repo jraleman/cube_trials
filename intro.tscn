@@ -3,7 +3,7 @@
 [ext_resource type="PackedScene" path="res://scenes/boot/intro.tscn" id="1_intro"]
 
 [node name="CubeTrialsIntro" instance=ExtResource("1_intro")]
-cards = Array[String](["A brown Nissan Cube.\nA very unreasonable commute.", "Five spark plugs.\nOne little car.\nBring it home."])
-hold = 1.8
+cards = Array[String](["The valley ran out of spark plugs.\nOne by one, its cars fell silent.", "The garages locked their stalled cars\nbehind iron bars to keep them safe.", "Only a brown Nissan Cube still runs,\nwith a crate of spark plugs aboard.", "Five plugs for every garage.\nSet the stranded cars free."])
+hold = 2.2
 fade_in = 0.5
 fade_out = 0.4

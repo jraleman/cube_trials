@@ -13,6 +13,8 @@ const View = preload("res://games/cube_trials/course_view.gd")
 const GalleryStage = preload("res://games/cube_trials/gallery_stage.gd")
 const Daylight = preload("res://games/cube_trials/world/daylight.gd")
 const TrialHUD = preload("res://games/cube_trials/trial_hud.gd")
+const Profiles = preload("res://games/cube_trials/vehicle_profiles.gd")
+const GarageReveal = preload("res://games/cube_trials/world/garage_reveal.gd")
 
 var _failures := PackedStringArray()
 var _course := Course.new()
@@ -93,6 +95,10 @@ func _run() -> void:
 		await _test_rendered_brakes(stage)
 	await _test_motion_blur()
 	_game.call("_on_play_again_pressed")
+	# A profile that already freed the Sonata still renders its closed door and reveal.
+	if str(_game.get("_captive_id")).is_empty():
+		_game.set("_captive_id", Profiles.SONATA)
+		_game.call("_apply_finish")
 	await _render_frames()
 	var state: State = _game.get("_state")
 	_drive_to(Course.CHECKPOINT_X[1] + 60.0)
@@ -135,6 +141,7 @@ func _run() -> void:
 	_drive_to(Course.END_X)
 	await _render_frames()
 	_expect(state.finished, "The rendered run must reach the real garage finish.")
+	await _test_garage_reveal()
 	_test_draw_budget()
 	await _capture("results")
 	_game.call("_on_see_score_pressed")
@@ -146,6 +153,7 @@ func _run() -> void:
 	Driver.release_controls()
 	_game.free()
 	state = null
+	await _test_sunset_reveal()
 	await _test_imported_gallery()
 	await _test_reference_car_gallery_menu()
 	get_root().size = Vector2i(1280, 720)
@@ -722,9 +730,10 @@ func _gallery_mouse(
 	root.push_input(event, true)
 
 
-func _test_draw_budget() -> void:
-	var view: Control = _game.get("_view")
-	var viewport: SubViewport = view.get("world_viewport")
+func _test_draw_budget(view: View = null) -> void:
+	if view == null:
+		view = _game.get("_view") as View
+	var viewport := view.world_viewport
 	var draws := viewport.get_render_info(
 		Viewport.RENDER_INFO_TYPE_VISIBLE, Viewport.RENDER_INFO_DRAW_CALLS_IN_FRAME
 	)
@@ -734,10 +743,96 @@ func _test_draw_budget() -> void:
 	_peak_draws = maxi(_peak_draws, draws)
 	_peak_triangles = maxi(_peak_triangles, triangles)
 	print("Render budget at x=%.1f, size=%s: %d draws / %d triangles"
-		% [(_game.get("_state") as State).position.x, get_root().size, draws, triangles])
+		% [view.state.position.x, get_root().size, draws, triangles])
 	_expect(draws > 10 and draws <= 200 and triangles > 1000 and triangles < 120000,
 		"The actual 3D view must stay within its Compatibility budget (%d draws / %d triangles)."
 		% [draws, triangles])
+
+
+## The first delivery frees the Sonata on screen. Each stage must render inside
+## the budget on desktop and phone, with Skip reachable but never over the car.
+func _test_garage_reveal() -> void:
+	var view := _game.get("_view") as View
+	var reveal := view.world.reveal
+	var skip := _game.get("_skip_reveal_button") as Button
+	var round_over := _game.get_node("%RoundOver") as Control
+	var outline := view.world.get("_parking_outline") as Node3D
+	_expect(bool(_game.call("is_revealing")) and skip.visible and not round_over.visible
+		and not view.world.car.visible and not outline.visible,
+		"The rendered finish must free the Sonata before the results cover the garage.")
+	_game.call("_set_reduced_motion_enabled", false)
+	var hop := GarageReveal.HOPS[0]
+	var moments := {"door": 1.6, "bars": 3.4, "hop": hop.x + hop.y * 0.5, "hearts": 5.6}
+	for moment: String in moments:
+		_game.call("advance_reveal", float(moments[moment]) - view.reveal_time)
+		_expect(bool(_game.call("is_revealing")) and reveal.car.visible,
+			"The %s stage must show the freed car before the results." % moment)
+		for dimensions in [Vector2i(1280, 720), Vector2i(390, 844)]:
+			get_root().size = dimensions
+			await _render_frames()
+			_test_draw_budget()
+			var physical_scale := float(get_root().size.x) / get_root().get_visible_rect().size.x
+			var view_rect := view.get_global_rect()
+			var car := _reveal_car_rect(view)
+			var button := skip.get_global_rect()
+			_expect(view_rect.encloses(car),
+				"At %s the %s stage must keep the freed car in shot." % [dimensions, moment])
+			_expect(view_rect.encloses(button) and not button.intersects(car)
+				and button.size.x * physical_scale >= 44.0 and button.size.y * physical_scale >= 44.0
+				and skip.get_theme_font_size("font_size") * physical_scale >= 12.0,
+				"At %s Skip must be a legible 44-pixel target that never covers the car (%s physical)."
+				% [dimensions, button.size * physical_scale])
+			if moment == "hop" and dimensions.x == 1280:
+				_expect(await _pixels_drawn_by(view, reveal.car) > 400,
+					"The hopping car must really render through the reveal's fog and bars.")
+			await _capture("reveal-%s-%dx%d" % [moment, dimensions.x, dimensions.y])
+	get_root().size = Vector2i(1280, 720)
+	_game.call("skip_reveal")
+	_game.call("_set_reduced_motion_enabled", true)
+	await _render_frames()
+	_expect(not bool(_game.call("is_revealing")) and round_over.visible and not skip.visible
+		and reveal.car.visible and reveal.door_open == 1.0 and reveal.bars_sunk == 1.0,
+		"The results must open over the freed car, awake behind the sunken bars.")
+
+
+## Sunset Ridge's CR-V reveal is the heaviest shot: the door half open over the
+## bars, with the beach behind the garage, must still fit the budget.
+func _test_sunset_reveal() -> void:
+	var view := View.new(Course.new(Course.SUNSET))
+	get_root().add_child(view)
+	view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var run := State.new(Profiles.CUBE, Course.SUNSET)
+	var parked := run.course.finish_x + run.course.finish_width * 0.5
+	run.position = Vector2(parked, run.course.ground_height(parked))
+	run.started = true
+	run.finished = true
+	run.collected.fill(true)
+	view.set_reduced_motion(false)
+	view.configure(run)
+	view.set_captive(Profiles.CRV)
+	view.start_reveal()
+	view.advance_reveal(1.6)
+	for dimensions in [Vector2i(1280, 720), Vector2i(390, 844)]:
+		get_root().size = dimensions
+		await _render_frames()
+		_expect(view.is_revealing() and view.world.reveal.car.visible
+			and view.get_global_rect().encloses(_reveal_car_rect(view)),
+			"Sunset Ridge must frame the CR-V behind its opening door at %s." % dimensions)
+		_test_draw_budget(view)
+		await _capture("reveal-sunset-%dx%d" % [dimensions.x, dimensions.y])
+	view.free()
+	get_root().size = Vector2i(1280, 720)
+	await _render_frames()
+
+
+## The freed car's on-screen rectangle, in the same space as the game's controls.
+func _reveal_car_rect(view: View) -> Rect2:
+	var car := view.world.reveal.car
+	var bounds := car.local_bounds()
+	var rect := Rect2(view.project_point(car.to_global(bounds.position)), Vector2.ZERO)
+	for index in 8:
+		rect = rect.expand(view.project_point(car.to_global(bounds.get_endpoint(index))))
+	return Rect2(view.get_global_rect().position + rect.position, rect.size)
 
 
 func _test_rendered_brakes(stage: int) -> void:
@@ -940,7 +1035,7 @@ func _test_parking_and_night() -> void:
 	var outline := garage.get_node("ParkingOutline") as MeshInstance3D
 	view.set_reduced_motion(true)
 	view.set_intense_effects(true)
-	_expect(await _outline_pixels(view, outline) > 20,
+	_expect(await _pixels_drawn_by(view, outline) > 20,
 		"The parking outline must visibly mark the road, not just exist as a material.")
 	_test_parking_hint(view)
 	var day := view.world_viewport.get_texture().get_image()
@@ -958,7 +1053,7 @@ func _test_parking_and_night() -> void:
 	_expect(_average_luminance(night) < _average_luminance(day) * 0.9
 		and _average_luminance(night) > 0.08,
 		"The real night image must be distinct from daylight without blacking out the course.")
-	_expect(await _outline_pixels(view, outline) > 20,
+	_expect(await _pixels_drawn_by(view, outline) > 20,
 		"Night parking must remain visibly outlined with intense effects disabled.")
 	var paint := view.world_camera.unproject_position(view.world.car.paint_sample())
 	var paint_color := night.get_pixel(
@@ -992,7 +1087,7 @@ func _test_parking_and_night() -> void:
 	await _render_frames()
 	_test_bounds()
 	_test_draw_budget()
-	_expect(await _outline_pixels(view, outline) > 20,
+	_expect(await _pixels_drawn_by(view, outline) > 20,
 		"The night parking target must remain visibly identifiable on a portrait phone.")
 	_test_parking_hint(view)
 	await _capture("parking-night-portrait")
@@ -1034,11 +1129,12 @@ func _test_parking_hint(view: View) -> void:
 		"The parking callout must stay legible, on-screen and above its pointer to the real bay.")
 
 
-func _outline_pixels(view: View, outline: MeshInstance3D) -> int:
-	outline.visible = false
+## Sampled pixels that change when a node is hidden, so a material alone never passes.
+func _pixels_drawn_by(view: View, node: Node3D) -> int:
+	node.visible = false
 	await _render_frames()
 	var off := view.world_viewport.get_texture().get_image()
-	outline.visible = true
+	node.visible = true
 	await _render_frames()
 	var on := view.world_viewport.get_texture().get_image()
 	var changed := 0

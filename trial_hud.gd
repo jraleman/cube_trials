@@ -89,6 +89,13 @@ func attach_pause(button: Button) -> void:
 	button.show()
 
 
+## A mode's own icon button, placed first so camera and pause keep their spots.
+func add_action(button: Button, texture: Texture2D) -> void:
+	_actions.add_child(button)
+	_actions.move_child(button, 0)
+	_style_action(button, texture)
+
+
 func set_camera_hint(mode: String, key: String) -> void:
 	camera_button.tooltip_text = "Camera: %s. Change view (%s / R3)" % [mode, key]
 	camera_button.accessibility_name = camera_button.tooltip_text

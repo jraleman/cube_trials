@@ -90,6 +90,11 @@ func _run() -> void:
 	get_root().size = Vector2i(1280, 720)
 	await _test_cockpit_jumping()
 	_game.call("_on_play_again_pressed")
+	# This profile has freed both cars, but the drive must still afford the closed
+	# door that hides each level's car until its first delivery.
+	_game.set("_captive_id", Profiles.freed_by(
+		str(Course.LEVELS[_course.number - 1]["completion_achievement"])))
+	_game.call("_apply_finish")
 	state = _game.get("_state")
 	_view.set_reduced_motion(false)
 	_view.set_day_night_enabled(false)

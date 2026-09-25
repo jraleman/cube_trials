@@ -3,32 +3,42 @@ extends RefCounted
 ## Each run owns one route, shared by drawing, suspension, cameras and recovery.
 
 const Tuning = preload("res://games/cube_trials/vehicle_tuning.gd")
+const Trail = preload("res://games/cube_trials/trail_layout.gd")
 const COPPER := "copper_creek"
 const SUNSET := "sunset_ridge"
 const ALPINE := "alpine_pass"
+## The player's own trail, built in the Trail Builder.
+const CUSTOM := "my_trail"
 const COPPER_COMPLETE := "cube_trials_home"
 const SUNSET_COMPLETE := "cube_trials_sunset"
 const ALPINE_COMPLETE := "cube_trials_alpine"
 
 enum Scenery { MOUNTAIN, BEACH, SNOW }
 
+## Stills of each route for the shared setup screen's level row, captured from
+## the real course by `tools/capture_art.gd`.
+const LEVEL_ART := "res://games/cube_trials/assets/levels/"
+
 const LEVELS: Array[Dictionary] = [
 	{
 		"id": COPPER, "title": "Level 1 - Copper Creek",
+		"icon": LEVEL_ART + "copper_creek.png",
 		"description": "The original mountain commute. Deliver five plugs to unlock Sunset Ridge and the Hyundai Sonata.",
 		"completion_achievement": COPPER_COMPLETE,
 		"unlock_text": "Level 2 - Sunset Ridge and Hyundai Sonata unlocked!",
 	},
 	{
 		"id": SUNSET, "title": "Level 2 - Sunset Ridge",
-		"description": "A sandy beach drive past palms, turquoise surf and four coastal jumps. Finish to unlock Alpine Pass and the Honda CR-V.",
+		"icon": LEVEL_ART + "sunset_ridge.png",
+		"description": "A sandy beach drive past palms, turquoise surf and four coastal jumps. Finish to unlock Alpine Pass, the Honda CR-V and the Trail Builder.",
 		"requires_achievement": COPPER_COMPLETE,
 		"locked_description": "Complete Level 1 - Copper Creek.",
 		"completion_achievement": SUNSET_COMPLETE,
-		"unlock_text": "Level 3 - Alpine Pass and Honda CR-V unlocked!",
+		"unlock_text": "Level 3 - Alpine Pass, Honda CR-V and Trail Builder unlocked!",
 	},
 	{
 		"id": ALPINE, "title": "Level 3 - Alpine Pass",
+		"icon": LEVEL_ART + "alpine_pass.png",
 		"description": "Climb through snowy peaks and frosted pines, cross seven summit gaps, then bring all five plugs home.",
 		"requires_achievement": SUNSET_COMPLETE,
 		"locked_description": "Complete Level 2 - Sunset Ridge.",
@@ -36,6 +46,16 @@ const LEVELS: Array[Dictionary] = [
 		"unlock_text": "All three levels complete!",
 	},
 ]
+## The setup screen's last level choice. It opens with the last car, so every
+## car can drive it, and it is not in LEVELS: a player's own trail has no
+## fixed route and earns no completion reward.
+const BUILDER := {
+	"id": CUSTOM, "title": "Trail Builder",
+	"icon": LEVEL_ART + "my_trail.png",
+	"description": "Build your own trail from blocks, then drive it. Just for fun: no Sparks or awards.",
+	"requires_achievement": SUNSET_COMPLETE,
+	"locked_description": "Free all three cars: complete Level 2 - Sunset Ridge.",
+}
 const TITLE := "COPPER CREEK"
 const START_X := 180.0
 const FINISH_X := 16400.0
@@ -201,8 +221,13 @@ const ROUTES := {
 }
 
 var id: String
+## 1-3 for the handcrafted levels, 0 for a player's own trail.
 var number: int
 var title: String
+## Identifies the scenery to build: the level id, or the id plus the shape of
+## a built trail, so an edited trail gets fresh scenery and an unchanged one
+## is reused.
+var layout_key: String
 var finish_x: float
 var end_x: float
 var finish_width := FINISH_WIDTH
@@ -215,13 +240,18 @@ var scenery := Scenery.MOUNTAIN
 var hill_color := Color("657b55")
 
 
-func _init(level_id := COPPER) -> void:
-	assert(ROUTES.has(level_id), "Unknown trial level: " + level_id)
+## [param route] is a built trail's `Trail.to_route()`. A CUSTOM course
+## without one drives the trail the builder last saved.
+func _init(level_id := COPPER, route: Dictionary = {}) -> void:
+	assert(level_id == CUSTOM or ROUTES.has(level_id), "Unknown trial level: " + level_id)
 	id = level_id
 	for index in LEVELS.size():
 		if LEVELS[index]["id"] == id:
 			number = index + 1
-	var data: Dictionary = ROUTES[id]
+	var data := route
+	if data.is_empty():
+		data = ROUTES[id] if ROUTES.has(id) else _saved_trail()
+	layout_key = "%s:%d" % [id, data.hash()] if id == CUSTOM else id
 	title = data["title"]
 	finish_x = data["finish_x"]
 	end_x = data["end_x"]
@@ -231,6 +261,38 @@ func _init(level_id := COPPER) -> void:
 	signs = data["signs"]
 	scenery = data.get("scenery", scenery)
 	hill_color = data.get("hill_color", hill_color)
+
+
+## The handcrafted levels, then the Trail Builder, for the setup screen.
+static func setup_levels() -> Array[Dictionary]:
+	var levels: Array[Dictionary] = LEVELS.duplicate(true)
+	levels.append(BUILDER.duplicate(true))
+	return levels
+
+
+static func _saved_trail() -> Dictionary:
+	var trail := Trail.new()
+	trail.load_file()
+	return trail.to_route()
+
+
+func is_custom() -> bool:
+	return id == CUSTOM
+
+
+## The achievement a first delivery earns, or "" on a player's own trail.
+func completion_achievement() -> String:
+	return "" if number == 0 else str(LEVELS[number - 1]["completion_achievement"])
+
+
+## "Level 2 - Sunset Ridge", or just the title of a player's own trail.
+func label() -> String:
+	return title if number == 0 else "Level %d - %s" % [number, title]
+
+
+## The HUD's shorter form: "L2 / Sunset Ridge".
+func short_label() -> String:
+	return title if number == 0 else "L%d / %s" % [number, title]
 
 
 func gap_intervals() -> Array[Vector2]:

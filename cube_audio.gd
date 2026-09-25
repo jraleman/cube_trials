@@ -25,6 +25,10 @@ static func cues() -> Dictionary[String, AudioStreamWAV]:
 		"crash": _tone([110.0, 73.42], 0.15),
 		"recover": _tone([196.0, 293.66], 0.10),
 		"finish": _tone([523.25, 659.25, 783.99, 1046.5], 0.14),
+		# The garage reveal: a rattling roll-up door, sinking bars and a happy double beep.
+		"door": _tone([130.81, 123.47, 130.81, 123.47, 130.81, 123.47, 116.54, 110.0], 0.055),
+		"bars": _tone([220.0, 146.83, 98.0], 0.08),
+		"horn": _tone([466.16, 0.0, 587.33], 0.09),
 	}
 
 

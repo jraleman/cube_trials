@@ -6,6 +6,7 @@ const State = preload("res://games/cube_trials/trial_state.gd")
 const Course = preload("res://games/cube_trials/course.gd")
 const Art = preload("res://games/cube_trials/cube_art.gd")
 const Landscape = preload("res://games/cube_trials/world/copper_creek.gd")
+const GarageReveal = preload("res://games/cube_trials/world/garage_reveal.gd")
 const SPEED_BLUR = preload("res://games/cube_trials/assets/shaders/speed_blur.gdshader")
 const CAMERA_OFFSET := Vector3(10, 6, 32)
 const MAX_RENDER_WIDTH := 1920
@@ -16,6 +17,14 @@ const CAMERA_NAMES := ["Side", "Chase", "Cockpit"]
 const CHASE_OFFSET := Vector3(-8.5, 4.1, 3.8)
 const CAMERA_CLEARANCE := 0.45
 const PERSPECTIVE_FAR := 40.0
+## The garage reveal: a fixed three-quarter shot of the whole bay, pushed in slowly.
+## The HUD's top rows get the widest margin: side, top and bottom share of the lens.
+const REVEAL_FOV := 58.0
+const REVEAL_MARGINS := Vector3(0.9, 0.78, 0.9)
+const REVEAL_YAW := 14.0
+const REVEAL_ELEVATION := 20.0
+const REVEAL_PUSH := 0.1
+const REVEAL_PUSH_SECONDS := 2.6
 
 enum CameraMode { SIDE, CHASE, COCKPIT }
 
@@ -32,6 +41,12 @@ var day_night_enabled := true
 var world: Landscape
 var world_viewport: SubViewport
 var world_camera: Camera3D
+## Seconds into the garage reveal; the final frame holds once it is finished.
+var reveal_time := 0.0
+var _revealing := false
+var _reveal_shown := false
+var _reveal_fired := {}
+var _captive: Array[String] = ["", "", ""]
 var _image: TextureRect
 var _overlay: Control
 var _zoom := 1.0
@@ -101,6 +116,15 @@ func set_finish(paint: String, rim: String, player_color := Color.TRANSPARENT) -
 		world.car.set_player_color(player_color)
 
 
+## The Trail Builder covers the whole scene, so the hidden world stops
+## rendering until the next test drive.
+func set_rendering(enabled: bool) -> void:
+	visible = enabled
+	if world_viewport != null:
+		world_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if enabled \
+			else SubViewport.UPDATE_DISABLED
+
+
 func _build_world() -> void:
 	if world != null:
 		world.remove_child(world_camera)
@@ -111,12 +135,80 @@ func _build_world() -> void:
 	world_viewport.add_child(world)
 	world.parking_label.visible = false
 	world.add_child(world_camera)
+	world.set_captive(_captive[0], _captive[1], _captive[2])
 
 
-## Replays and hot-seat turns reuse scenery; changing level rebuilds it from the same route.
+## Shuts a locked car in this level's garage until [method start_reveal].
+## "" leaves the bay open and empty.
+func set_captive(vehicle_id: String, paint := "", rim := "") -> void:
+	_captive.assign([vehicle_id, paint, rim])
+	if world != null:
+		world.set_captive(vehicle_id, paint, rim)
+		present(0.0)
+
+
+func start_reveal() -> void:
+	if world == null or not world.has_captive():
+		return
+	reveal_time = 0.0
+	_revealing = true
+	_reveal_shown = true
+	_reveal_fired.clear()
+	_clear_motion_blur()
+	present(0.0)
+
+
+## Returns the sound cues reached during this step; each plays once per reveal.
+func advance_reveal(delta: float) -> PackedStringArray:
+	var reached := PackedStringArray()
+	if not _revealing:
+		return reached
+	reveal_time = minf(reveal_time + maxf(delta, 0.0), GarageReveal.duration(reduced_motion))
+	var times := GarageReveal.cue_times(reduced_motion)
+	for cue: String in times:
+		if not _reveal_fired.has(cue) and reveal_time >= float(times[cue]):
+			_reveal_fired[cue] = true
+			reached.append(cue)
+	present(delta)
+	return reached
+
+
+func reveal_complete() -> bool:
+	return reveal_time >= GarageReveal.duration(reduced_motion)
+
+
+## Jumps to the final frame without replaying any cue that was skipped.
+func skip_reveal() -> void:
+	if not _revealing:
+		return
+	reveal_time = GarageReveal.duration(reduced_motion)
+	for cue: String in GarageReveal.CUES:
+		_reveal_fired[cue] = true
+	present(0.0)
+
+
+## The freed car keeps its final pose behind the results.
+func finish_reveal() -> void:
+	_revealing = false
+	present(0.0)
+
+
+func is_revealing() -> bool:
+	return _revealing
+
+
+func is_showing_reveal() -> bool:
+	return _reveal_shown
+
+
+## Replays and hot-seat turns reuse scenery; changing level, or editing a
+## built trail, rebuilds it from the same route.
 func configure(run: State) -> void:
 	state = run
-	if course.id != state.course.id:
+	_revealing = false
+	_reveal_shown = false
+	reveal_time = 0.0
+	if course.layout_key != state.course.layout_key:
 		course = state.course
 		_build_world()
 	world.set_vehicle(state.vehicle.id)
@@ -170,7 +262,14 @@ func present(delta: float) -> void:
 	world.car.steady_cabin = camera_mode == CameraMode.COCKPIT
 	world.present(state, ambient_time, reduced_motion, intense_effects, braking,
 		0.0 if recovered else motion_delta, daylight_time)
+	world.stage_reveal(_reveal_shown)
+	world.pose_reveal(reveal_time if _reveal_shown else 0.0, reduced_motion, intense_effects)
 	_update_camera_atmosphere()
+	if _reveal_shown:
+		_present_reveal_camera()
+		_clear_motion_blur()
+		_overlay.queue_redraw()
+		return
 	match camera_mode:
 		CameraMode.SIDE:
 			snap = _present_side_camera(motion_delta, snap)
@@ -294,9 +393,50 @@ func _set_perspective(horizontal_fov: float, minimum: float, maximum: float, nea
 	world_camera.far = PERSPECTIVE_FAR
 
 
+## A fixed three-quarter shot of the bay, its header and the shop's sign, fitted
+## to either orientation. The parked car has left the shot, so nothing blocks the
+## bars; the chase camera's range and haze keep the scene within its budget.
+func _present_reveal_camera() -> void:
+	_set_perspective(REVEAL_FOV, 34.0, 70.0, 0.1)
+	var focus := world.reveal_focus()
+	var center := focus.get_center()
+	var yaw := deg_to_rad(REVEAL_YAW)
+	var elevation := deg_to_rad(REVEAL_ELEVATION)
+	var back := Vector3(sin(yaw) * cos(elevation), sin(elevation), cos(yaw) * cos(elevation))
+	var aim := Basis.looking_at(-back)
+	var tangent := tan(deg_to_rad(world_camera.fov * 0.5))
+	var across := tangent * maxf(size.x, 1.0) / maxf(size.y, 1.0) * REVEAL_MARGINS.x
+	var top := tangent * REVEAL_MARGINS.y
+	var bottom := tangent * REVEAL_MARGINS.z
+	var heights := PackedFloat32Array()
+	var depths := PackedFloat32Array()
+	var distance := 0.0
+	for index in 8:
+		var offset := focus.get_endpoint(index) - center
+		heights.append(offset.dot(aim.y))
+		depths.append(-offset.dot(back))
+		distance = maxf(distance, absf(offset.dot(aim.x)) / across - depths[index])
+	# The vertical window is lopsided, so every pair of corners bounds the distance.
+	for high in 8:
+		for low in 8:
+			distance = maxf(distance, (heights[high] - heights[low] - top * depths[high]
+				- bottom * depths[low]) / (top + bottom))
+	var lift := Vector2(-INF, INF)
+	for index in 8:
+		lift.x = maxf(lift.x, heights[index] - top * (distance + depths[index]))
+		lift.y = minf(lift.y, heights[index] + bottom * (distance + depths[index]))
+	var push := 0.0
+	if not reduced_motion:
+		var settle := clampf(reveal_time / REVEAL_PUSH_SECONDS, 0.0, 1.0)
+		push = REVEAL_PUSH * pow(1.0 - settle, 3.0)
+	world_camera.basis = aim
+	world_camera.position = center + back * distance * (1.0 + push) \
+		+ aim.y * (lift.x + lift.y) * 0.5
+
+
 func _update_camera_atmosphere() -> void:
 	var environment := world.daylight.environment
-	environment.fog_enabled = camera_mode != CameraMode.SIDE
+	environment.fog_enabled = camera_mode != CameraMode.SIDE or _reveal_shown
 	if environment.fog_enabled:
 		environment.fog_mode = Environment.FOG_MODE_DEPTH
 		environment.fog_light_color = world.daylight.sky_material.sky_horizon_color
@@ -306,7 +446,10 @@ func _update_camera_atmosphere() -> void:
 
 
 ## Ambient nodes return to a defined resting pose instead of continuing behind a menu.
+## A reveal in progress keeps its place: the door stays as open as it was.
 func set_reduced_motion(value: bool) -> void:
+	if _reveal_shown and value != reduced_motion:
+		reveal_time = GarageReveal.remap_time(reveal_time, reduced_motion, value)
 	reduced_motion = value
 	if value:
 		ambient_time = 0.0
@@ -425,7 +568,8 @@ func _draw_overlay() -> void:
 
 func _draw_parking_hint() -> void:
 	_parking_hint_bounds = Rect2()
-	if state.position.x < course.finish_x - 700.0 or state.crash_wait > 0.0 or state.failed:
+	if _reveal_shown or state.position.x < course.finish_x - 700.0 or state.crash_wait > 0.0 \
+		or state.failed:
 		return
 	var parking := world.parking_target()
 	if camera_mode != CameraMode.SIDE:

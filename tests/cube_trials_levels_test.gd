@@ -11,6 +11,7 @@ const View = preload("res://games/cube_trials/course_view.gd")
 const Art = preload("res://games/cube_trials/cube_art.gd")
 const Landscape = preload("res://games/cube_trials/world/copper_creek.gd")
 const Daylight = preload("res://games/cube_trials/world/daylight.gd")
+const GarageReveal = preload("res://games/cube_trials/world/garage_reveal.gd")
 const GAME := "res://games/cube_trials/gameplay.tscn"
 
 var _failures := PackedStringArray()
@@ -36,6 +37,7 @@ func _run() -> void:
 		_test_recovery_and_parking(str(level["id"]))
 	_test_new_drives()
 	await _test_route_views()
+	await _test_garage_reveals()
 	await _test_progression()
 	Driver.release_controls()
 	await process_frame
@@ -187,6 +189,162 @@ func _test_route_views() -> void:
 	await process_frame
 
 
+## Each earned car waits behind its own level's garage door. The reveal depends
+## only on its clock: every cue plays once and in order, skipping or changing
+## Reduced motion keeps its place, and the shot holds the bay on any screen.
+func _test_garage_reveals() -> void:
+	for index in GarageReveal.KEYS.size():
+		_expect(is_equal_approx(GarageReveal.remap_time(GarageReveal.KEYS[index], false, true),
+				GarageReveal.REDUCED_KEYS[index])
+			and is_equal_approx(GarageReveal.remap_time(GarageReveal.REDUCED_KEYS[index], true, false),
+				GarageReveal.KEYS[index]),
+			"Both reveal timings must share their door, bars and wake-up moments.")
+	var view := View.new()
+	view.size = Vector2(1280, 620)
+	get_root().add_child(view)
+	for level in Course.LEVELS:
+		var captive := Profiles.freed_by(str(level["completion_achievement"]))
+		var run := State.new(Profiles.CUBE, str(level["id"]))
+		view.set_reduced_motion(false)
+		view.configure(run)
+		view.set_captive(captive)
+		# Render each route before the next replaces it: the Compatibility renderer
+		# leaks the radiance maps of a sky freed before its first frame.
+		await process_frame
+		var world := view.world
+		if captive.is_empty():
+			view.start_reveal()
+			_expect(not world.has_captive() and not view.is_revealing(),
+				run.course.title + ": a level that frees no car must never play a reveal.")
+			continue
+		var reveal := world.reveal
+		var title := Profiles.new(captive).title
+		_expect(world.has_captive() and reveal.visible and reveal.door_open == 0.0
+			and not reveal.car.visible and reveal.sign_label.text.contains(title.to_upper()),
+			title + " must wait unseen behind its level's labeled garage door.")
+		_expect(_drawn(reveal) == PackedStringArray(["ClosedDoor", "SignLabel"])
+			and (reveal.get_node("RollUpDoor/ClosedDoor") as GeometryInstance3D).cast_shadow
+				== GeometryInstance3D.SHADOW_CASTING_SETTING_OFF,
+			title + ": drivers pass the shut door all level, so it must cost one shadowless mesh and its sign.")
+		_test_reveal_timeline(reveal, title)
+		var outline := world.get("_parking_outline") as Node3D
+		for reduced: bool in [false, true]:
+			view.set_reduced_motion(reduced)
+			view.configure(run)
+			view.start_reveal()
+			_expect(view.is_revealing() and not world.car.visible and not outline.visible,
+				title + ": the parked car and its outline must leave the reveal's shot.")
+			var heard := PackedStringArray()
+			for step in 200:
+				for cue in view.advance_reveal(0.05):
+					heard.append(cue)
+					_expect(absf(view.reveal_time - float(GarageReveal.cue_times(reduced)[cue])) < 0.051,
+						title + ": each reveal cue must play at its own moment.")
+				if view.reveal_complete():
+					break
+			_expect(heard == PackedStringArray(["door", "bars", "horn"])
+				and view.advance_reveal(1.0).is_empty(),
+				title + ": every reveal cue must play exactly once, in order.")
+		view.set_reduced_motion(false)
+		view.configure(run)
+		view.start_reveal()
+		view.advance_reveal(3.5)
+		view.set_reduced_motion(true)
+		_expect(is_equal_approx(view.reveal_time, GarageReveal.remap_time(3.5, false, true))
+			and reveal.door_open == 1.0 and reveal.bars_sunk == 1.0
+			and view.advance_reveal(0.0).is_empty(),
+			title + ": Reduced motion mid-reveal must keep its place without replaying cues.")
+		view.skip_reveal()
+		_expect(view.reveal_complete() and view.advance_reveal(0.1).is_empty()
+			and reveal.door_open == 1.0 and reveal.bars_sunk == 1.0 and reveal.eyes == 1.0,
+			title + ": skipping must land on the final pose without replaying the horn.")
+		view.finish_reveal()
+		_expect(view.is_showing_reveal() and not view.is_revealing() and reveal.car.visible,
+			title + ": the freed car must keep its final pose behind the results.")
+		view.set_reduced_motion(false)
+		view.configure(run)
+		_expect(world.car.visible and outline.visible and not view.is_showing_reveal(),
+			title + ": the next run must bring back the parked car and its outline.")
+		view.start_reveal()
+		var hop := GarageReveal.HOPS[0]
+		view.advance_reveal(hop.x + hop.y * 0.5)
+		for dimensions: Vector2 in [Vector2(1280, 620), Vector2(390, 700), Vector2(2560, 620)]:
+			view.size = dimensions
+			view.call("_resize_world")
+			var shot := _shot(view, world.reveal_focus(), Transform3D.IDENTITY)
+			_expect(Rect2(Vector2.ZERO, view.size).encloses(shot)
+				and maxf(shot.size.x / view.size.x, shot.size.y / view.size.y) > 0.7
+				and Rect2(Vector2.ZERO, view.size).encloses(
+					_shot(view, reveal.car.local_bounds(), reveal.car.global_transform)),
+				"%s: the reveal must fill a %s view with the bay, its sign and the hopping car."
+				% [title, dimensions])
+		view.size = Vector2(1280, 620)
+		view.call("_resize_world")
+	view.free()
+	await process_frame
+
+
+## Samples one timing: the door rises before the bars sink, and the car stays
+## asleep until the horn, then hops (except in Reduced motion) under hearts.
+func _test_reveal_timeline(reveal: GarageReveal, title: String) -> void:
+	var shut := reveal.get_node("RollUpDoor/ClosedDoor") as Node3D
+	var slats := reveal.get_node("RollUpDoor/DoorSlats") as Node3D
+	for reduced: bool in [false, true]:
+		for intense: bool in [true, false]:
+			var horn := float(GarageReveal.cue_times(reduced)["horn"])
+			var door := 0.0
+			var bars := 0.0
+			var hopped := false
+			var hearts := 0
+			for step in 149:
+				var time := GarageReveal.duration(reduced) * step / 148.0
+				reveal.pose(time, reduced, intense)
+				_expect(reveal.door_open >= door and reveal.bars_sunk >= bars
+					and (reveal.bars_sunk == 0.0 or reveal.door_open == 1.0)
+					and reveal.car.visible == (reveal.door_open > 0.0)
+					and (time >= horn or (reveal.eyes == 0.0 and reveal.hop_height == 0.0
+						and reveal.hearts_shown == 0)),
+					title + ": the door must rise first, then the bars, before the car wakes.")
+				_expect(shut.is_visible_in_tree() == (reveal.door_open == 0.0)
+					and not (shut.is_visible_in_tree() and slats.is_visible_in_tree()),
+					title + ": the shut door must give way to its rolling slats, never draw both.")
+				door = reveal.door_open
+				bars = reveal.bars_sunk
+				hopped = hopped or reveal.hop_height > 0.3
+				hearts = maxi(hearts, reveal.hearts_shown)
+			_expect(hopped == not reduced,
+				title + " must hop for joy, except under Reduced motion.")
+			var resting := GarageReveal.RESTING_HEARTS.size()
+			_expect((hearts == resting) if reduced or not intense else (hearts > resting),
+				title + ": hearts must float up, or rest still without motion or intense effects.")
+			reveal.pose(GarageReveal.duration(reduced), reduced, intense)
+			_expect(reveal.door_open == 1.0 and reveal.bars_sunk == 1.0 and reveal.eyes == 1.0
+				and reveal.hop_height == 0.0 and reveal.car.visible,
+				title + ": the reveal must end with the car awake and back on the floor.")
+
+
+## The on-screen rectangle of a box, or an empty one if part of it is behind the camera.
+func _shot(view: View, box: AABB, transform: Transform3D) -> Rect2:
+	var minimum := Vector2(INF, INF)
+	var maximum := Vector2(-INF, -INF)
+	for index in 8:
+		var point := transform * box.get_endpoint(index)
+		if view.world_camera.is_position_behind(point):
+			return Rect2(Vector2(-1, -1), Vector2.ZERO)
+		minimum = minimum.min(view.project_point(point))
+		maximum = maximum.max(view.project_point(point))
+	return Rect2(minimum, maximum - minimum)
+
+
+## Names of the geometry a node would actually submit for drawing.
+func _drawn(root_node: Node) -> PackedStringArray:
+	var names := PackedStringArray()
+	for node in root_node.find_children("*", "GeometryInstance3D", true, false):
+		if (node as GeometryInstance3D).is_visible_in_tree():
+			names.append(node.name)
+	return names
+
+
 func _test_scenery(world: Landscape) -> void:
 	var course := world.course
 	var beach := course.scenery == Course.Scenery.BEACH
@@ -334,6 +492,9 @@ func _test_progression() -> void:
 		and (_session.call("character_for_player", 0) as Dictionary)["id"] == Profiles.CUBE,
 		"Programmatic selection must not bypass either gate.")
 	var abandoned := _new_game(Course.COPPER, Profiles.CUBE)
+	var waiting := (abandoned.get("_view") as View).world
+	_expect(waiting.has_captive() and waiting.reveal.vehicle_id == Profiles.SONATA,
+		"Until Level 1 is complete, its garage must hold the locked Sonata.")
 	abandoned.get("_state").collected.fill(true)
 	abandoned.free()
 	_expect(not _achievements.call("is_unlocked", Course.COPPER_COMPLETE),
@@ -344,14 +505,21 @@ func _test_progression() -> void:
 	failed.call("_update_round", 0.0, 0.0)
 	_expect(not _achievements.call("is_unlocked", Course.COPPER_COMPLETE),
 		"Running out of lives must not open Level 2.")
+	_expect(not failed.call("is_revealing") and (failed.get_node("%RoundOver") as Control).visible,
+		"A failed run must go straight to the results, leaving the Sonata locked away.")
 	failed.free()
 	await process_frame
 
 	var first := _new_game(Course.COPPER, Profiles.CUBE)
 	_drive_turn(first)
 	_expect((first.get("_state") as State).finished
-		and (first.get_node("%RoundOver") as Control).visible,
+		and _achievements.call("is_unlocked", Course.COPPER_COMPLETE),
 		"The first unlock must come from a genuine parked delivery through GameShell.")
+	_expect(first.call("is_revealing") and not (first.get_node("%RoundOver") as Control).visible,
+		"The first delivery must free the Sonata on screen before the results.")
+	first.call("skip_reveal")
+	_expect(not first.call("is_revealing") and (first.get_node("%RoundOver") as Control).visible,
+		"Skipping the garage reveal must land on the shared results.")
 	_expect(str(first.get("_round_progression_notes")).contains("Hyundai Sonata"),
 		"Results must announce the level and vehicle reward.")
 	var payload: Dictionary = first.call("_share_payload")
@@ -361,6 +529,8 @@ func _test_progression() -> void:
 	_expect(first.get("_state").course.id == Course.COPPER
 		and first.get("_state").vehicle.id == Profiles.CUBE and not first.get("_state").started,
 		"Replay must keep the selected level and car, not silently advance the campaign.")
+	_expect(not (first.get("_view") as View).world.has_captive(),
+		"Once freed, the Sonata must leave Level 1's garage open on replay.")
 	first.free()
 	await _check_setup(1)
 	_check_persistence(1)
@@ -396,10 +566,15 @@ func _test_progression() -> void:
 	_expect(_achievements.call("is_unlocked", Course.SUNSET_COMPLETE)
 		and not _achievements.call("is_unlocked", Course.ALPINE_COMPLETE),
 		"One finisher must unlock Level 3 and the CR-V after the last turn, not complete Level 3.")
+	var garage := (second.get("_view") as View).world
+	_expect(second.call("is_revealing") and garage.reveal.vehicle_id == Profiles.CRV
+		and not (second.get_node("%RoundOver") as Control).visible,
+		"A hot-seat match must free the CR-V after the final turn, before the results.")
 	var notes: PackedStringArray = second.get("_round_progression_notes")
 	second.call("_award_round_achievements", 0, 0)
 	_expect((second.get("_round_progression_notes") as PackedStringArray) == notes,
 		"Repeated result handling must not announce or grant the same unlock twice.")
+	# Leaving mid-reveal keeps the unlock that was already saved.
 	second.free()
 	await _check_setup(2)
 	_check_persistence(2)
@@ -409,6 +584,9 @@ func _test_progression() -> void:
 	_expect(third.get("_state").finished
 		and _achievements.call("is_unlocked", Course.ALPINE_COMPLETE),
 		"The unlocked CR-V must complete the third level through real gameplay.")
+	_expect(not (third.get("_view") as View).world.has_captive() and not third.call("is_revealing")
+		and (third.get_node("%RoundOver") as Control).visible,
+		"Level 3 frees no car, so its delivery must go straight to the results.")
 	payload = third.call("_share_payload")
 	_expect(payload["level_title"] == "Alpine Pass" and payload["vehicle_id"] == Profiles.CRV
 		and str(payload["mode"]).contains("Level 3"),
@@ -456,8 +634,9 @@ func _check_setup(completed: int) -> void:
 	menu.call("_on_single_player_pressed")
 	var picker := menu.get("_level_choice") as OptionButton
 	var cards: Array = menu.get("_player_setup_cards")
-	_expect(picker != null and picker.item_count == 3,
-		"Setup must list all three levels, including their locked entries.")
+	_expect(picker != null and picker.item_count == Course.setup_levels().size()
+		and picker.item_count == Course.LEVELS.size() + 1,
+		"Setup must list all three levels and the Trail Builder, including their locked entries.")
 	for index in 3:
 		var locked := index > completed
 		_expect(picker.is_item_disabled(index) == locked,
@@ -469,6 +648,14 @@ func _check_setup(completed: int) -> void:
 			_expect(not picker.get_popup().get_item_tooltip(index).is_empty()
 				and not car_picker.get_popup().get_item_tooltip(index).is_empty(),
 				"Locked choices must explain their requirements.")
+	# The Trail Builder opens once every car is free, after Level 2.
+	var builder := Course.LEVELS.size()
+	var builder_locked := completed < 2
+	_expect(picker.is_item_disabled(builder) == builder_locked,
+		"The Trail Builder must unlock with the last car, after Level 2.")
+	if builder_locked:
+		_expect(not picker.get_popup().get_item_tooltip(builder).is_empty(),
+			"A locked Trail Builder must explain its requirement.")
 	menu.call("_on_multiplayer_pressed")
 	for card: Dictionary in cards:
 		var car_picker := card["picker"] as OptionButton

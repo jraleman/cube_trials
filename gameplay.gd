@@ -11,6 +11,13 @@ const CubeAudio = preload("res://games/cube_trials/cube_audio.gd")
 const Art = preload("res://games/cube_trials/cube_art.gd")
 const Profiles = preload("res://games/cube_trials/vehicle_profiles.gd")
 const Course = preload("res://games/cube_trials/course.gd")
+const Trail = preload("res://games/cube_trials/trail_layout.gd")
+const TrailEditor = preload("res://games/cube_trials/trail_editor.gd")
+const BUILD_ICON = preload("res://games/cube_trials/assets/icons/build.svg")
+## The key or tap that parked the car must not also skip the scene it starts.
+const REVEAL_SKIP_GRACE := 0.8
+## The results line on a player's own trail, in place of any reward.
+const TRAIL_NOTE := "Your own trail: just for fun, no Sparks or awards."
 
 var _state := State.new()
 var _course := Course.new()
@@ -41,6 +48,19 @@ var _layout_pending := false
 var _camera_key := ""
 var _jump_pending := false
 var _capture_inset := 0.0
+## The locked car behind this level's garage bars, or "" once it has been freed.
+var _captive_id := ""
+var _holding_results := false
+var _held_effects: Array[Callable] = []
+var _reveal_clock := 0.0
+var _skip_reveal_button: Button
+## The Trail Builder's trail, loaded the first time a round drives it.
+var _trail: Trail
+## This round's built route, or empty on a handcrafted level.
+var _route: Dictionary = {}
+var _editor: TrailEditor
+var _build_button: Button
+var _results_build_button: Button
 
 
 func _ready() -> void:
@@ -65,7 +85,14 @@ func _load_round_settings() -> void:
 	_air_control = Settings.tunable(Options.AIR_CONTROL_KEY)
 	_engine_enabled = Settings.tunable_bool(Options.ENGINE_AUDIO_KEY)
 	_day_night_enabled = Settings.tunable_bool(Options.DAY_NIGHT_KEY)
-	_course = Course.new(str(GameSession.selected_level().get("id", Course.COPPER)))
+	var level_id := str(GameSession.selected_level().get("id", Course.COPPER))
+	_route = {}
+	if level_id == Course.CUSTOM:
+		if _trail == null:
+			_trail = Trail.new()
+			_trail.load_file()
+		_route = _trail.to_route()
+	_course = Course.new(level_id, _route)
 
 
 ## Garage changes apply immediately; hot-seat body paint still identifies the seat.
@@ -75,6 +102,9 @@ func _apply_finish() -> void:
 	_paint_id = Store.equipped_id(Options.GAME_ID, Options.PAINT_SLOTS[_state.vehicle.id])
 	_rim_id = Store.equipped_id(Options.GAME_ID, Options.RIM_SLOT)
 	_view.set_finish(_paint_id, _rim_id, _driver_color())
+	var captive_paint := "" if _captive_id.is_empty() \
+		else Store.equipped_id(Options.GAME_ID, Options.PAINT_SLOTS[_captive_id])
+	_view.set_captive(_captive_id, captive_paint, _rim_id)
 
 
 func _build_playfield() -> void:
@@ -129,20 +159,83 @@ func _build_playfield() -> void:
 	choose_level.pressed.connect(_choose_level)
 	_see_score_button.get_parent().add_child(choose_level)
 	AudioManager.attach_ui_sounds(choose_level)
+	_skip_reveal_button = Button.new()
+	_skip_reveal_button.name = "SkipRevealButton"
+	_skip_reveal_button.text = "Skip"
+	_skip_reveal_button.focus_mode = Control.FOCUS_NONE
+	_skip_reveal_button.tooltip_text = "Skip the garage scene and show the results."
+	_skip_reveal_button.pressed.connect(skip_reveal)
+	_skip_reveal_button.hide()
+	overlay.add_child(_skip_reveal_button)
+	# A solid plate, like the HUD's own buttons, stays readable over the sunlit shop.
+	for style_name in ["normal", "hover", "pressed"]:
+		var style := _skip_reveal_button.get_theme_stylebox(style_name).duplicate() as StyleBox
+		if style is StyleBoxFlat:
+			(style as StyleBoxFlat).bg_color = Color("142725").lightened(
+				0.10 if style_name == "hover" else 0.0)
+		_skip_reveal_button.add_theme_stylebox_override(style_name, style)
+	AudioManager.attach_ui_sounds(_skip_reveal_button)
+	if _course.is_custom():
+		_build_trail_builder(overlay)
 	get_viewport().size_changed.connect(_resize_layout)
 	_configure_mode_ui()
 	_resize_layout()
 
 
+## The Trail Builder covers the scene until its Play button starts a drive.
+## A build button on the HUD and another on the results bring it back.
+func _build_trail_builder(overlay: Control) -> void:
+	_editor = TrailEditor.new()
+	_editor.name = "TrailBuilder"
+	_editor.trail = _trail
+	_editor.set_reduced_motion(_reduced_motion_enabled)
+	_editor.hide()
+	overlay.add_child(_editor)
+	_editor.play_requested.connect(_play_trail)
+	_editor.pause_requested.connect(open_pause_menu)
+	AudioManager.attach_ui_sounds(_editor)
+	_build_button = Button.new()
+	_build_button.name = "BuildButton"
+	_build_button.focus_mode = Control.FOCUS_NONE
+	_build_button.pressed.connect(_on_build_pressed)
+	_trial_hud.add_action(_build_button, BUILD_ICON)
+	_build_button.tooltip_text = "Change your trail"
+	_build_button.accessibility_name = _build_button.tooltip_text
+	AudioManager.attach_ui_sounds(_build_button)
+	_results_build_button = Button.new()
+	_results_build_button.name = "BuildTrailButton"
+	_results_build_button.text = "Build"
+	_results_build_button.icon = BUILD_ICON
+	_results_build_button.set("icon_max_width", _play_again_button.get("icon_max_width"))
+	_results_build_button.tooltip_text = "Change your trail, then drive it again."
+	_results_build_button.pressed.connect(_on_build_pressed)
+	var actions := _play_again_button.get_parent()
+	actions.add_child(_results_build_button)
+	actions.move_child(_results_build_button, _play_again_button.get_index() + 1)
+	AudioManager.attach_ui_sounds(_results_build_button)
+
+
 func _reset_round_state() -> void:
+	_stop_reveal()
 	_runs.clear()
 	for player in _active_player_indices():
 		var selected := GameSession.character_for_player(player)
-		var run := State.new(str(selected.get("id", Profiles.CUBE)), _course.id)
+		var run := State.new(str(selected.get("id", Profiles.CUBE)), _course.id, _route)
 		run.air_control = _air_control
 		_runs.append(run)
 	_handoff.hide()
+	_captive_id = _locked_car()
 	_begin_turn(0)
+
+
+## The car this level's garage holds until the level is first completed, or "".
+## A player's own trail never holds one.
+func _locked_car() -> String:
+	var achievement := _course.completion_achievement()
+	if achievement.is_empty():
+		return ""
+	var vehicle_id := Profiles.freed_by(achievement)
+	return "" if AchievementManager.is_unlocked(achievement) else vehicle_id
 
 
 func _begin_turn(player: int) -> void:
@@ -170,7 +263,7 @@ func _begin_turn(player: int) -> void:
 func _activate_round() -> void:
 	_announcement.hide()
 	get_viewport().gui_release_focus()
-	_feedback("Level %d - %s. Five plugs to deliver." % [_course.number, _course.title], "start")
+	_feedback("%s. Five plugs to deliver." % _course.label(), "start")
 
 
 func _choose_level() -> void:
@@ -178,11 +271,60 @@ func _choose_level() -> void:
 		Router.goto("res://scenes/menus/mode_select.tscn")
 
 
+## A player's own trail opens in the Trail Builder; every drive starts from Play.
+func _begin_first_round() -> void:
+	if _editor != null:
+		_open_builder()
+	else:
+		super()
+
+
+func is_building() -> bool:
+	return _editor != null and _editor.visible
+
+
+## Stops any drive without results, since a trail's test drive records nothing,
+## and shows the Trail Builder. The scene behind it stops drawing until Play.
+func _open_builder() -> void:
+	_round_active = false
+	_round_timer.stop()
+	_finish_round()
+	_stop_reveal()
+	_reset_motion_fx()
+	_clear_world_fx()
+	for control: Control in [_round_over, _handoff, _announcement, _bottom_stack, _trial_hud]:
+		control.hide()
+	_feedback_left = 0.0
+	_view.set_rendering(false)
+	_editor.open()
+	_queue_layout()
+
+
+func _play_trail() -> void:
+	if not is_building() or get_tree().paused or Router.is_transitioning():
+		return
+	_editor.close()
+	_view.set_rendering(true)
+	_bottom_stack.show()
+	_trial_hud.show()
+	_start_round()
+	_queue_layout()
+
+
+func _on_build_pressed() -> void:
+	if _editor == null or is_building() or is_revealing() or get_tree().paused \
+		or Router.is_transitioning():
+		return
+	_open_builder()
+
+
 func _process(delta: float) -> void:
 	if _handoff != null and _handoff.visible and _handoff_button.disabled \
 		and not _inputs_held():
 		_handoff_button.disabled = false
 		_handoff_button.grab_focus()
+	if is_revealing() and not get_tree().paused and not Router.is_transitioning():
+		advance_reveal(delta)
 	super(delta)
 
 
@@ -345,15 +487,17 @@ func open_pause_menu() -> void:
 func _on_pause_closed() -> void:
 	super()
 	_apply_finish()
-	if _round_active:
+	if _round_active or is_revealing():
 		get_viewport().gui_release_focus()
+	elif is_building():
+		_editor.focus_default()
 
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_PAUSED:
 		_state.clear_jump_input()
 		_jump_pending = false
-	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and _round_active:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and (_round_active or is_revealing()):
 		open_pause_menu()
 
 
@@ -399,6 +543,124 @@ func _start_next_turn() -> void:
 	_begin_turn(_active_player + 1)
 	_round_active = true
 	_activate_round()
+
+
+## The first delivery to a garage that still holds a car frees it on screen
+## before the results. Replays, Level 3 and runs that never reached the garage
+## go straight to the results, exactly as before.
+func _end_round() -> void:
+	var finished := false
+	for run in _runs:
+		finished = finished or run.finished
+	_holding_results = finished and not _captive_id.is_empty()
+	super()
+	if not _holding_results:
+		return
+	if not AchievementManager.is_unlocked(_course.completion_achievement()):
+		_release_results()
+		return
+	_round_over.hide()
+	# The shell queues focus for Play Again; a hidden button must not take Enter.
+	get_viewport().gui_release_focus.call_deferred()
+	_reveal_clock = 0.0
+	_view.start_reveal()
+	_skip_reveal_button.show()
+	_queue_layout()
+
+
+## Steps the garage reveal. Tests drive it here because their games do not process.
+func advance_reveal(delta: float) -> void:
+	if not is_revealing():
+		return
+	_reveal_clock += maxf(delta, 0.0)
+	for cue in _view.advance_reveal(delta):
+		_play_reveal_cue(cue)
+	if _view.reveal_complete():
+		_end_reveal()
+
+
+## Lands on the freed car's final pose and shows the results straight away.
+func skip_reveal() -> void:
+	if not is_revealing():
+		return
+	_view.skip_reveal()
+	_end_reveal()
+
+
+func is_revealing() -> bool:
+	return _view != null and _view.is_revealing()
+
+
+func _play_reveal_cue(cue: String) -> void:
+	var title := Profiles.new(_captive_id).title
+	match cue:
+		"door":
+			AudioManager.request_caption("The garage door rattles open.")
+		"bars":
+			AudioManager.request_caption("Iron bars sink into the floor.")
+		"horn":
+			AudioManager.request_caption("Beep beep! The %s is free." % title)
+			_feedback_text = "%s FREED!" % title.to_upper()
+			_feedback_left = 1.0
+			_sync_hud()
+	if _cues.has(cue):
+		AudioManager.play_sfx(_cues[cue], -7.0)
+
+
+func _end_reveal() -> void:
+	if not _holding_results:
+		return
+	_view.finish_reveal()
+	_skip_reveal_button.hide()
+	_round_over.show()
+	_score_panel.hide()
+	_round_panel.show()
+	_animate_modal_panel(_round_panel)
+	_play_again_button.grab_focus()
+	_release_results()
+
+
+## Confetti, fanfare and unlock captions wait for the reveal instead of covering it.
+func _after_reveal(effect: Callable) -> void:
+	if _holding_results:
+		_held_effects.append(effect)
+	else:
+		effect.call()
+
+
+func _release_results() -> void:
+	_holding_results = false
+	var effects := _held_effects.duplicate()
+	_held_effects.clear()
+	for effect: Callable in effects:
+		effect.call()
+
+
+func _stop_reveal() -> void:
+	_holding_results = false
+	_held_effects.clear()
+	if _skip_reveal_button != null:
+		_skip_reveal_button.hide()
+
+
+func _celebrate_level_unlock(title: String) -> void:
+	if _holding_results:
+		_held_effects.append(_celebrate_level_unlock.bind(title))
+		return
+	super(title)
+
+
+## Pause still opens the menu. Any other press after a short grace skips.
+func _unhandled_input(event: InputEvent) -> void:
+	if not is_revealing() or event.is_action_pressed("pause"):
+		super(event)
+		return
+	get_viewport().set_input_as_handled()
+	if event.is_echo() or _reveal_clock < REVEAL_SKIP_GRACE or get_tree().paused:
+		return
+	if event.is_action_pressed("skip") or event.is_action_pressed("ui_accept") \
+		or event.is_action_pressed(Options.JUMP):
+		skip_reveal()
 
 
 func _build_handoff() -> void:
@@ -465,6 +727,9 @@ func _configure_mode_ui() -> void:
 		(stats.get_node("StreakCaption") as Label).text = "Landed flips"
 		(stats.get_node("StreakCaption") as Control).show()
 		(stats.get_child(7) as Control).show()
+	if _build_button != null:
+		# One driver must not rebuild the trail in the middle of a hot-seat match.
+		_build_button.visible = GameSession.is_single_player()
 	_sync_hud()
 
 
@@ -477,7 +742,7 @@ func _sync_hud() -> void:
 		var driver := _state.vehicle.title
 		if not GameSession.is_single_player():
 			driver = "P%d / %s" % [_active_player + 1, driver]
-		driver = "L%d / %s\n%s" % [_state.course.number, _state.course.title, driver]
+		driver = "%s\n%s" % [_state.course.short_label(), driver]
 		_trial_hud.set_driver(driver, Art.CREAM if GameSession.is_single_player() else _driver_color())
 
 
@@ -531,9 +796,9 @@ func _round_length_seconds() -> float:
 
 
 func _round_mode_summary() -> String:
-	return "%s / Level %d - %s / %d lives" % [
+	return "%s / %s / %d lives" % [
 		"Solo" if GameSession.is_single_player() else GameSession.mode_title(),
-		_course.number, _course.title, State.STARTING_LIVES,
+		_course.label(), State.STARTING_LIVES,
 	]
 
 
@@ -558,16 +823,21 @@ func _describe_round_outcome(_one: int, _two: int) -> Dictionary:
 			"color": _player_color(best) if leaders.size() == 1 else Art.CREAM,
 		}
 	if _state.failed:
+		# A player's own trail pays nothing, so there are no points to keep.
+		var advice := "Try a cleaner line." if _course.is_custom() \
+			else "Your points are kept; try a cleaner line."
 		return {
 			"result": "OUT OF LIVES",
-			"subtitle": "%s / %d of 5 plugs collected. Your points are kept; try a cleaner line." \
-				% [_course.title, _state.plug_count()],
+			"subtitle": "%s / %d of 5 plugs collected. %s" \
+				% [_course.title, _state.plug_count(), advice],
 			"color": Color("ff8b82"),
 		}
 	if not _state.finished:
+		# A player's own trail has no completion medal to miss.
+		var medal := "" if _course.is_custom() else " No completion medal was earned."
 		return {
 			"result": "TRIAL STOPPED",
-			"subtitle": "%s: the garage is still waiting. No completion medal was earned." % _course.title,
+			"subtitle": "%s: the garage is still waiting.%s" % [_course.title, medal],
 			"color": Art.CREAM,
 		}
 	return {
@@ -580,20 +850,34 @@ func _describe_round_outcome(_one: int, _two: int) -> Dictionary:
 
 
 func _award_round_achievements(_one: int, _two: int) -> void:
+	if _course.is_custom():
+		_round_progression_notes.append(TRAIL_NOTE)
+		return
 	for run in _runs:
 		if not run.finished:
 			continue
 		var level: Dictionary = Course.LEVELS[run.course.number - 1]
-		var achievement: String = level["completion_achievement"]
+		var achievement := run.course.completion_achievement()
 		var completed := AchievementManager.is_unlocked(achievement)
 		_unlock_round_achievement(achievement)
 		if not completed:
 			_round_progression_notes.append(str(level["unlock_text"]))
-			AudioManager.request_caption(str(level["unlock_text"]))
+			_after_reveal(AudioManager.request_caption.bind(str(level["unlock_text"])))
 		if run.recoveries == 0:
 			_unlock_round_achievement("cube_trials_clean")
 		if run.medal() == "GOLD":
 			_unlock_round_achievement("cube_trials_gold")
+
+
+## A player's own trail is practice, so it never counts toward any game's
+## unlock rule.
+func _record_round(player_one_total: int, player_two_total: int) -> String:
+	return "" if _course.is_custom() else super(player_one_total, player_two_total)
+
+
+## Nor does it pay Sparks: a tiny trail must not become a points farm.
+func _round_points_earned(player_one_total: int, player_two_total: int) -> int:
+	return 0 if _course.is_custom() else super(player_one_total, player_two_total)
 
 
 func _best_combo_summary() -> String:
@@ -601,7 +885,9 @@ func _best_combo_summary() -> String:
 		var finishers := 0
 		for run in _runs:
 			finishers += int(run.finished)
-		return "%d / %d deliveries completed. One shared garage payout." % [finishers, _runs.size()]
+		return "%d / %d deliveries completed.%s" % [
+			finishers, _runs.size(), "" if _course.is_custom() else " One shared garage payout.",
+		]
 	return "%d / 5 plugs / %d recoveries / %d landed flips / longest jump %.2fs" % [
 		_state.plug_count(), _state.recoveries, _state.landed_flips, _state.longest_air,
 	]
@@ -623,7 +909,8 @@ func _player_stats(player: int) -> Dictionary:
 		"accuracy": run.plug_count() * 20 if run != null else 0,
 		"streak": run.landed_flips if run != null else 0,
 		"details": [] if run == null else [
-			{"label": "Level", "value": "%d - %s" % [run.course.number, run.course.title]},
+			{"label": "Level", "value": run.course.title if run.course.is_custom()
+				else "%d - %s" % [run.course.number, run.course.title]},
 			{"label": "Car", "value": run.vehicle.title},
 			{"label": "Time + penalties", "value": State.time_text(run.adjusted_time())},
 			{"label": "Result", "value": run.medal() if run.finished else "Did not finish"},
@@ -749,6 +1036,8 @@ func _set_reduced_motion_enabled(value: bool) -> void:
 	super(value)
 	if _view != null:
 		_view.set_reduced_motion(value)
+	if _editor != null:
+		_editor.set_reduced_motion(value)
 
 
 func _set_intense_effects_enabled(value: bool) -> void:
@@ -758,6 +1047,9 @@ func _set_intense_effects_enabled(value: bool) -> void:
 
 
 func _spawn_round_confetti(color: Color) -> void:
+	if _holding_results:
+		_held_effects.append(_spawn_round_confetti.bind(color))
+		return
 	if _representative_run().finished and _intense_effects_enabled:
 		super(color)
 
@@ -832,5 +1124,15 @@ func _layout_course() -> void:
 	_view.size = Vector2(bounds.size.x, maxf(1, bounds.size.y - controls_height - 12 * _ui_factor))
 	_trial_hud.position = bounds.position + Vector2.ONE * 12 * _ui_factor
 	_trial_hud.fit_width(bounds.size.x - 24 * _ui_factor, _ui_factor)
+	# Bottom right of the scene, clear of the route bar along its lower edge, and
+	# as tall as the HUD buttons so it keeps a 44-pixel physical touch target.
+	_skip_reveal_button.add_theme_font_size_override("font_size", roundi(24 * _ui_factor))
+	_skip_reveal_button.size = Vector2(150, 68) * _ui_factor
+	_skip_reveal_button.position = _view.position + _view.size - _skip_reveal_button.size \
+		- Vector2(18, 44) * _ui_factor
+	if _editor != null:
+		_editor.position = Vector2.ZERO
+		_editor.size = get_viewport_rect().size
+		_editor.fit(bounds, _ui_factor)
 	_sync_hud()
 	_view.present(0.0)

@@ -7,6 +7,7 @@ const Art = preload("res://games/cube_trials/cube_art.gd")
 const Profiles = preload("res://games/cube_trials/vehicle_profiles.gd")
 const State = preload("res://games/cube_trials/trial_state.gd")
 const Course = preload("res://games/cube_trials/course.gd")
+const Trail = preload("res://games/cube_trials/trail_layout.gd")
 
 
 ## The shell supplies pause, settings, achievements, results and score sharing.
@@ -23,7 +24,12 @@ static func manifest() -> GameManifest:
 	game.max_local_players = 3
 	game.local_multiplayer_turns = true
 	game.characters = Profiles.CHARACTERS
-	game.levels = Course.LEVELS
+	game.levels = Course.setup_levels()
+	# The Trail Builder's own trail is progress, so the Saves screen keeps it.
+	game.save_files = [{
+		"path": Trail.SAVE_PATH, "title": "My Trail",
+		"description": "The trail built in the Trail Builder.",
+	}]
 	game.character_preview_scene_path = "res://games/cube_trials/character_preview.tscn"
 	game.supports_cpu_opponent = false
 	game.uses_shell_round_rules = false
@@ -42,15 +48,18 @@ static func manifest() -> GameManifest:
 	game.gallery_stage_scene_path = "res://games/cube_trials/gallery_stage.tscn"
 	game.stats_url = "https://deskcansaw.com"
 	game.copy = {
+		"mode_select_intro": "The valley's cars are stuck without spark plugs. Choose how you want to deliver them.",
 		"single_player_description": (
 			"Start with the Nissan Cube on Copper Creek. Deliver five spark plugs "
 			+ "to unlock more cars and two new handcrafted trails."
 		),
 		"multiplayer_description": "Two or three players take full turns on the same trail.",
 		"solo_confirm_title": "Choose your level and car",
+		"character_label": "Car",
 		"solo_confirm_description": (
-			"Clear Level 1 for Level 2 and the Sonata; clear Level 2 for Level 3 and the CR-V. "
-			+ "All cars share driving tuning. Factory or garage paint is used for solo runs."
+			"Clear Level 1 for Level 2 and the Sonata; clear Level 2 for Level 3, the CR-V "
+			+ "and the Trail Builder. All cars share driving tuning. "
+			+ "Factory or garage paint is used for solo runs."
 		),
 		"versus_confirm_title": "Choose a level and each player's car",
 		"versus_confirm_description": (
@@ -72,12 +81,21 @@ static func manifest() -> GameManifest:
 		),
 		"instructions_headline": "THE VERY UNREASONABLE COMMUTE",
 		"instructions_rules": (
-			"Three handcrafted trails: Copper Creek's washboard and six ravines, "
+			"The story: the valley has run out of spark plugs, and its cars have fallen silent. "
+			+ "The garages locked their stalled cars behind iron bars to keep them safe. "
+			+ "Only a brown Nissan Cube still runs, carrying a crate of spark plugs. "
+			+ "The first delivery to Copper Creek's garage frees the Hyundai Sonata, "
+			+ "and the first to Sunset Ridge's frees the Honda CR-V.\n"
+			+ "Three handcrafted trails: Copper Creek's washboard and six ravines, "
 			+ "Sunset Ridge's sandy beaches and four coastal crossings, then Alpine Pass's "
 			+ "snow-covered climb and seven summit gaps.\n"
 			+ "Start in the Nissan Cube on Level 1. Complete Copper Creek to unlock "
 			+ "Level 2 and the Hyundai Sonata. Complete Sunset Ridge to unlock "
-			+ "Level 3 and the Honda CR-V. Unlocks are saved, and unlocked cars can replay any open level.\n"
+			+ "Level 3, the Honda CR-V and the Trail Builder. "
+			+ "Unlocks are saved, and unlocked cars can replay any open level.\n"
+			+ "In the Trail Builder, tap a piece to add it after the highlighted block, "
+			+ "tap a block to pick it, then press the green Play button to drive. "
+			+ "Your trail is saved as you build. It is just for fun: no Sparks or awards.\n"
 			+ "Collect all FIVE numbered spark plugs, then slow down inside the garage. "
 			+ "Keep your roof off the rocks. Carry speed up the quarry ramp, hold the "
 			+ "nose up at takeoff, then level the car for landing. "
@@ -145,7 +163,7 @@ static func manifest() -> GameManifest:
 		},
 		Course.SUNSET_COMPLETE: {
 			"title": "Sunset Delivery", "badge": "RIDGE",
-			"description": "Complete Sunset Ridge. Unlock Level 3 and the Honda CR-V.",
+			"description": "Complete Sunset Ridge. Unlock Level 3, the Honda CR-V and the Trail Builder.",
 		},
 		Course.ALPINE_COMPLETE: {
 			"title": "Top of the Commute", "badge": "SUMMIT",

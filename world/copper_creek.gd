@@ -7,6 +7,7 @@ const Daylight = preload("res://games/cube_trials/world/daylight.gd")
 const Builder = preload("res://games/cube_trials/world/mesh_builder.gd")
 const Cube = preload("res://games/cube_trials/world/cube_model.gd")
 const TireParticles = preload("res://games/cube_trials/world/tire_particles.gd")
+const GarageReveal = preload("res://games/cube_trials/world/garage_reveal.gd")
 const Course = preload("res://games/cube_trials/course.gd")
 const State = preload("res://games/cube_trials/trial_state.gd")
 const PINE_MODEL = preload("res://games/cube_trials/assets/models/pine_tree.glb")
@@ -51,6 +52,9 @@ var checkpoint_flags: Array[MeshInstance3D] = []
 var checkpoint_labels: Array[Label3D] = []
 var garage_label: Label3D
 var parking_label: Label3D
+## The locked car waiting in this garage, built only once a level has one.
+var reveal: GarageReveal
+var _garage_root: Node3D
 var _flag_materials: Array[StandardMaterial3D] = []
 var _flag_rest_colors: Array[Color] = []
 var _garage_lamps: Array[MeshInstance3D] = []
@@ -67,6 +71,7 @@ var _snowfall: MultiMeshInstance3D
 var _last_plugs := -1
 var _last_checkpoint := -1
 var _last_finished := false
+var _reveal_staged := false
 
 
 func _init(route: Course = null) -> void:
@@ -95,6 +100,7 @@ func set_vehicle(vehicle_id: String) -> void:
 		remove_child(car)
 		car.queue_free()
 		car = Cube.new(vehicle_id)
+		car.visible = not _reveal_staged
 		add_child(car)
 	_last_plugs = -1
 	_last_checkpoint = -1
@@ -137,6 +143,50 @@ func parking_target() -> Vector3:
 	return _parking_outline.to_global(Vector3(0, 0, PARKING_DEPTH * 0.5))
 
 
+## Shuts [param vehicle_id] in behind the door and bars; "" leaves the bay open.
+func set_captive(vehicle_id: String, paint := "", rim := "") -> void:
+	if reveal == null:
+		if vehicle_id.is_empty():
+			return
+		reveal = GarageReveal.new()
+		_garage_root.add_child(reveal)
+	reveal.set_captive(vehicle_id, paint, rim)
+	_update_workshop_light()
+
+
+func has_captive() -> bool:
+	return reveal != null and not reveal.vehicle_id.is_empty()
+
+
+func pose_reveal(time: float, reduced: bool, intense: bool) -> void:
+	if reveal != null:
+		reveal.pose(time, reduced, intense)
+	_update_workshop_light()
+
+
+## The parked car and its outline leave the reveal's shot: nothing blocks the
+## bay, and the scene stays within the draw budget with two detailed cars.
+func stage_reveal(shown: bool) -> void:
+	if shown == _reveal_staged:
+		return
+	_reveal_staged = shown
+	car.visible = not shown
+	_parking_outline.visible = not shown
+
+
+## World-space box the reveal camera keeps in frame.
+func reveal_focus() -> AABB:
+	return _garage_root.transform * GarageReveal.FOCUS
+
+
+func _update_workshop_light() -> void:
+	var energy := daylight.night_amount * 1.6
+	if has_captive():
+		energy = maxf(energy, reveal.bay_light)
+	_workshop_light.visible = energy > 0.01
+	_workshop_light.light_energy = energy
+
+
 func _update_garage(state: State, time: float, reduced: bool, intense: bool) -> void:
 	if _last_plugs != state.plug_count() or _last_finished != state.finished:
 		_last_plugs = state.plug_count()
@@ -167,8 +217,7 @@ func _update_garage(state: State, time: float, reduced: bool, intense: bool) -> 
 	_parking_material.set_shader_parameter("pulse",
 		0.9 + sin(time * 1.8) * 0.1 if animate else 1.0)
 	_parking_material.set_shader_parameter("halo_strength", 1.0 if intense else 0.0)
-	_workshop_light.visible = daylight.night_amount > 0.01
-	_workshop_light.light_energy = daylight.night_amount * 1.6
+	_update_workshop_light()
 
 
 func _build_terrain() -> void:
@@ -249,10 +298,11 @@ func _build_terrain() -> void:
 					earth.quad(far_top, near_top, near_top - depth, far_top - depth, shade)
 	_mesh("ExactDrivingSurface", road, Art.material(0.98))
 	_mesh("LayeredQuarryRock", earth, Art.material(0.98))
+	var gaps := course.gap_intervals()
 	var markers := Builder.new()
 	var marker_color := Color("e6c77d") if course.scenery == Course.Scenery.MOUNTAIN \
 		else Color("a86c2d")
-	for gap in course.gap_intervals():
+	for gap in gaps:
 		for offset: float in [130.0, 90.0, 50.0]:
 			var x := gap.x - offset
 			var a := Art.world_point(Vector2(x, course.ground_height(x))) + Vector3.UP * 0.025
@@ -260,7 +310,9 @@ func _build_terrain() -> void:
 				+ Vector3.UP * 0.025
 			markers.quad(a + Vector3(0, 0, 2.5), b + Vector3(0, 0, 2.5),
 				b - Vector3(0, 0, 2.5), a - Vector3(0, 0, 2.5), marker_color)
-	_mesh("JumpApproachMarkers", markers, signage_material())
+	# A trail built in the Trail Builder may have no jumps to mark.
+	if not gaps.is_empty():
+		_mesh("JumpApproachMarkers", markers, signage_material())
 
 
 func _build_hills() -> void:
@@ -761,6 +813,7 @@ func _build_garage() -> void:
 	var model := garage_model(false, course.finish_width)
 	model.position = Vector3(x, y, -4.9)
 	add_child(model)
+	_garage_root = model
 	var shop := model.get_node("ImportedBodyShop") as Node3D
 	var floor_mesh := shop.get_node("CarBodyShop/Forecourt") as MeshInstance3D
 	var bounds := (model.transform * shop.transform) * floor_mesh.mesh.get_aabb()

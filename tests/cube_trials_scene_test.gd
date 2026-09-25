@@ -71,7 +71,7 @@ func _run() -> void:
 	_test_live_accessibility(settings)
 	_test_damage_lifecycle()
 	_test_life_loss()
-	_test_real_finish()
+	await _test_real_finish()
 	_game.call("_on_play_again_pressed")
 	var replay: State = _game.get("_state")
 	_expect(not replay.finished and replay.plug_count() == 0 and replay.checkpoint == 0
@@ -712,7 +712,16 @@ func _test_brake_inputs() -> void:
 
 func _test_real_finish() -> void:
 	_game.call("_on_play_again_pressed")
+	# A profile that already freed the Sonata still exercises its garage reveal.
+	if str(_game.get("_captive_id")).is_empty():
+		_game.set("_captive_id", "cube_sonata")
+		_game.call("_apply_finish")
 	var state: State = _game.get("_state")
+	var view := _game.get("_view") as View
+	var reveal := view.world.reveal
+	_expect(reveal.visible and reveal.door_open == 0.0 and not reveal.car.visible
+		and reveal.sign_label.text.contains("HYUNDAI SONATA"),
+		"Level 1's closed garage door must name the locked Sonata waiting behind it.")
 	for frame in 60 * 90:
 		Driver.hold_controls(state)
 		_game.call("_update_round", 1.0 / 60.0, 0.0)
@@ -723,6 +732,7 @@ func _test_real_finish() -> void:
 		"A real input-driven finish must end the shared round exactly once.")
 	_expect(state.recoveries == 0 and state.medal() == "GOLD",
 		"The scene's input driver must produce a genuinely clean gold run.")
+	await _test_garage_reveal(view)
 	_expect((_game.get_node("%RoundOver") as Control).visible
 		and (_game.get_node("%ResultLabel") as Label).text.contains("HOME IN ONE PIECE"),
 		"The finish must reach the shared results rather than a parallel game UI.")
@@ -742,6 +752,57 @@ func _test_real_finish() -> void:
 	var before := state.adjusted_time()
 	_game.call("_update_round", 3.0, 0.0)
 	_expect(state.adjusted_time() == before, "Results cannot keep spending race time.")
+
+
+## The first delivery frees the waiting car before the shared results. Pause
+## still works, a press carried over from driving cannot skip it, and Skip lands
+## on the freed car with the held confetti and captions.
+func _test_garage_reveal(view: View) -> void:
+	var reveal := view.world.reveal
+	var round_over := _game.get_node("%RoundOver") as Control
+	var skip := _game.get("_skip_reveal_button") as Button
+	var outline := view.world.get("_parking_outline") as Node3D
+	_expect(bool(_game.call("is_revealing")) and not round_over.visible and skip.visible
+		and not view.world.car.visible and not outline.visible,
+		"The first delivery must clear the bay and free the Sonata before the results.")
+	var achievements := get_root().get_node("AchievementManager")
+	_expect(bool(achievements.call("is_unlocked", Course.COPPER_COMPLETE))
+		and not (_game.get("_held_effects") as Array).is_empty(),
+		"The unlock must be saved at once while confetti and captions wait for the reveal.")
+	await process_frame
+	await process_frame
+	_expect(get_root().gui_get_focus_owner() == null,
+		"Hidden results must not keep keyboard focus during the reveal.")
+	_push_action(&"ui_accept")
+	_expect(bool(_game.call("is_revealing")),
+		"A press carried over from driving must not skip the reveal straight away.")
+	_push_action(&"pause")
+	var menu: Node = _game.get("_pause_menu")
+	_expect(is_instance_valid(menu) and paused, "Pause must still open the menu during the reveal.")
+	var clock := view.reveal_time
+	_game.call("_process", 1.0)
+	_push_action(&"skip")
+	_expect(view.reveal_time == clock and bool(_game.call("is_revealing")),
+		"A paused reveal must hold its frame and ignore Skip.")
+	if is_instance_valid(menu):
+		menu.call("resume")
+	_game.call("_process", 1.0)
+	_expect(view.reveal_time > clock and reveal.door_open > 0.0 and reveal.car.visible,
+		"Resuming must continue the reveal as the door rolls up on the waiting car.")
+	_push_action(&"skip")
+	_expect(not bool(_game.call("is_revealing")) and round_over.visible and not skip.visible
+		and reveal.door_open == 1.0 and reveal.bars_sunk == 1.0 and reveal.eyes == 1.0,
+		"After a short grace, Skip must land on the freed car behind the results.")
+	_expect((_game.get("_held_effects") as Array).is_empty()
+		and get_root().gui_get_focus_owner() == _game.get("_play_again_button"),
+		"The results must release the held celebration and take keyboard focus.")
+
+
+func _push_action(action: StringName) -> void:
+	var event := InputEventAction.new()
+	event.action = action
+	event.pressed = true
+	get_root().push_input(event)
 
 
 func _test_damage_lifecycle() -> void:

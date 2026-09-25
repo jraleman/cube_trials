@@ -7,16 +7,23 @@ const Course = preload("res://games/cube_trials/course.gd")
 const CUBE := "cube_car"
 const SONATA := "cube_sonata"
 const CRV := "cube_crv"
+## The setup screen's car row shows this glyph beside each title.
+const CAR_ICON := "res://games/cube_trials/assets/icons/car.svg"
 const CHARACTERS: Array[Dictionary] = [
-	{"id": CUBE, "title": "Nissan Cube", "description": "The boxy original. Factory bronze."},
+	{
+		"id": CUBE, "title": "Nissan Cube", "description": "The boxy original. Factory bronze.",
+		"icon": CAR_ICON,
+	},
 	{
 		"id": SONATA, "title": "Hyundai Sonata",
 		"description": "Long and low: hop over sharp crests. Factory pearl white.",
+		"icon": CAR_ICON,
 		"requires_achievement": Course.COPPER_COMPLETE,
 		"locked_description": "Complete Level 1 - Copper Creek.",
 	},
 	{
 		"id": CRV, "title": "Honda CR-V", "description": "A compact SUV. Factory deep blue.",
+		"icon": CAR_ICON,
 		"requires_achievement": Course.SUNSET_COMPLETE,
 		"locked_description": "Complete Level 2 - Sunset Ridge.",
 	},
@@ -73,6 +80,16 @@ var body_origin_height: float
 var axles: Array[Vector2] = []
 var roof: Array[Vector2] = []
 var body_contacts: Array[Vector2] = []
+
+
+## The car waiting behind the garage bars until [param achievement] is earned, or "".
+static func freed_by(achievement: String) -> String:
+	if achievement.is_empty():
+		return ""
+	for character: Dictionary in CHARACTERS:
+		if character.get("requires_achievement", "") == achievement:
+			return character["id"]
+	return ""
 
 
 func _init(vehicle_id := CUBE) -> void:

@@ -91,9 +91,10 @@ var _jump_grace := 0.0
 var _jump_recharge := 0.0
 
 
-func _init(vehicle_id := Profiles.CUBE, level_id := Course.COPPER) -> void:
+## [param route] carries a built trail's shape; see Course's constructor.
+func _init(vehicle_id := Profiles.CUBE, level_id := Course.COPPER, route: Dictionary = {}) -> void:
 	vehicle = Profiles.new(vehicle_id)
-	course = Course.new(level_id)
+	course = Course.new(level_id, route)
 	_respawn()
 
 
