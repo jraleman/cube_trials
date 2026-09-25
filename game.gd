@@ -29,7 +29,8 @@ static func manifest() -> GameManifest:
 	game.uses_shell_round_rules = false
 	game.tunables = Options.TUNABLES
 	game.control_bindings = Options.CONTROL_BINDINGS
-	game.tutorial_poster_path = "res://games/cube_trials/assets/tutorial_poster.png"
+	game.tutorial_video_path = "res://games/cube_trials/assets/video/tutorial.ogv"
+	game.tutorial_poster_path = "res://games/cube_trials/assets/video/tutorial_poster.webp"
 	game.share_art_scene_path = "res://games/cube_trials/share_art.tscn"
 	# Each car keeps its own paint purchases; wheel finishes are shared.
 	game.store_currency = Options.STORE_CURRENCY

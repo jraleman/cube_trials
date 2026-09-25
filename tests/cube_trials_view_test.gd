@@ -646,6 +646,7 @@ func _test_reference_car_gallery_menu() -> void:
 	if stage == null:
 		gallery.free()
 		return
+	var viewer := gallery.get_node("%Viewer") as Control
 	var shown := {}
 	for dimensions in [Vector2i(1280, 720), Vector2i(390, 844)]:
 		get_root().size = dimensions
@@ -672,8 +673,9 @@ func _test_reference_car_gallery_menu() -> void:
 				continue
 			_expect((gallery.get_node("%ExhibitTitle") as Label).text == sample["title"]
 				and not (gallery.get_node("%Placeholder") as Label).visible
-				and (gallery.get_node("%Controls") as Control).visible,
-				"A reference-car selection must show its label and working viewer, not a badge.")
+				and gallery.get_node_or_null("%Controls") == null
+				and not viewer.accessibility_description.is_empty(),
+				"A reference car needs its label and direct viewer, not a toolbar or badge.")
 			if shown.has(id):
 				_expect(model == shown[id], "Revisiting a car must reuse its cached exhibit.")
 			shown[id] = model
@@ -682,20 +684,42 @@ func _test_reference_car_gallery_menu() -> void:
 					"Only the selected Gallery exhibit may remain visible.")
 			var camera: Camera3D = stage.get("_camera")
 			var initial := camera.transform
-			(gallery.get_node("%TurnRight") as Button).button_down.emit()
+			var center := viewer.get_global_rect().get_center()
+			_gallery_mouse(MOUSE_BUTTON_LEFT, true, center)
+			var motion := InputEventMouseMotion.new()
+			motion.relative = Vector2(80, 20)
+			motion.position = center + motion.relative
+			motion.global_position = motion.position
+			motion.button_mask = MOUSE_BUTTON_MASK_LEFT
+			root.push_input(motion, true)
+			_gallery_mouse(MOUSE_BUTTON_LEFT, false, motion.position)
 			await _render_frames()
 			_expect(not camera.transform.is_equal_approx(initial),
-				"The Gallery turn control must orbit " + id)
-			(gallery.get_node("%ZoomIn") as Button).button_down.emit()
+				"Dragging the Gallery viewer must orbit " + id)
+			_gallery_mouse(MOUSE_BUTTON_WHEEL_UP, true, center)
+			_gallery_mouse(MOUSE_BUTTON_WHEEL_UP, false, center)
 			await _render_frames()
 			_expect(float(stage.get("_zoom")) > 1.0,
-				"The Gallery zoom control must magnify " + id)
-			(gallery.get_node("%ResetButton") as Button).pressed.emit()
+				"Scrolling over the Gallery viewer must magnify " + id)
+			_gallery_mouse(MOUSE_BUTTON_LEFT, true, center, true)
+			_gallery_mouse(MOUSE_BUTTON_LEFT, false, center)
 			await _render_frames()
 			_expect(camera.transform.is_equal_approx(initial),
-				"Reset must restore the reference car's default framing.")
+				"Double-click must restore the reference car's default framing.")
 			await _capture("gallery-menu-%s-%dx%d" % [id, dimensions.x, dimensions.y])
 	gallery.free()
+
+
+func _gallery_mouse(
+	button: MouseButton, pressed: bool, at: Vector2, double_click := false
+) -> void:
+	var event := InputEventMouseButton.new()
+	event.button_index = button
+	event.pressed = pressed
+	event.position = at
+	event.global_position = at
+	event.double_click = double_click
+	root.push_input(event, true)
 
 
 func _test_draw_budget() -> void:

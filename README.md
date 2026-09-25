@@ -66,7 +66,7 @@ world/coilover.gd          # shared helical spring, rigid damper and telescoping
 world/cube_finish.gd       # what each bought paint and wheel finish looks like
 world/nissan_cube.tscn     # reusable stock-proportion car using the same adapter
 world/mesh_builder.gd      # batches original geometry into lit surfaces
-assets/                    # game-icon.png, tutorial_poster.png (both generated)
+assets/                    # generated icon/art, plus video/tutorial.ogv and its poster
 assets/models/             # portable car and reference-prop GLBs, plus Godot import settings
 assets/shaders/            # scenery-only speed blur, parking outline and frosted foliage
 tests/                     # twelve suites plus input-only driver and controller fixtures
@@ -653,7 +653,7 @@ locked choices, live unlocks, phone-sized level selection and the results-to-set
 
 ## Regenerating art
 
-The icon and picker poster in `assets/` are captures of the actual meshes, not a
+The icon and original still artwork in `assets/` are captures of the actual meshes, not a
 second interpretation of the car. Regenerate them with a real graphics window,
 from `godot-base`:
 
@@ -662,6 +662,21 @@ godot --path . --script res://games/cube_trials/tools/capture_art.gd -- --game=c
 ```
 
 `tools/` is development-only and is excluded from every export preset.
+
+### Walkthrough recording
+
+The instructions screen and picker use `assets/video/tutorial.ogv` and its
+matching WebP poster. The 36-second captioned Copper Creek segment shows actual
+throttle, jumps, collected plugs, checkpoint flags, Side/Chase/Cockpit cameras
+and a recovery with its five-second penalty. It introduces the delivery goal,
+but does not claim to finish the full course.
+
+Re-record from `godot-base` with
+`pwsh tools\record_tutorials.ps1 -Godot godot -Games cube_trials`.
+The game-owned `tools/tutorial_driver.gd` reuses the input-only regression driver
+and never assigns the car's pose, cargo or checkpoint progress. Its milestone
+validator rejects incomplete takes. Capture uses an isolated save profile and a
+temporary bottom inset for captions; normal gameplay and physics are unchanged.
 
 ### Blender authoring model
 

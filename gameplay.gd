@@ -40,6 +40,7 @@ var _ui_factor := 1.0
 var _layout_pending := false
 var _camera_key := ""
 var _jump_pending := false
+var _capture_inset := 0.0
 
 
 func _ready() -> void:
@@ -811,7 +812,12 @@ func _queue_layout() -> void:
 func _playfield_bounds() -> Rect2:
 	var dimensions := get_viewport_rect().size
 	var inset := Vector2.ONE * 12 * _ui_factor
-	return Rect2(inset, (dimensions - inset * 2.0).max(Vector2.ONE))
+	return Rect2(inset, (dimensions - inset * 2.0 - Vector2(0, _capture_inset)).max(Vector2.ONE))
+
+
+func _set_capture_inset(bottom: float) -> void:
+	_capture_inset = maxf(bottom, 0.0)
+	_queue_layout()
 
 
 func _layout_course() -> void:
