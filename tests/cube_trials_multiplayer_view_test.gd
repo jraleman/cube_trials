@@ -145,10 +145,22 @@ func _run() -> void:
 		if game.get("_share_card_round") == game.get("_round_id"):
 			break
 	await _render()
-	_check_panel(game.get("_score_panel"), "Three-player detailed scores")
 	var ui: Array = game.get("_player_ui")
 	_expect((ui[2]["stats_card"] as Control).is_visible_in_tree(),
 		"Detailed results must not drop Player 3.")
+	var scroll := game.get("_round_over") as ScrollContainer
+	var panel := game.get("_score_panel") as Control
+	var screen := get_root().get_visible_rect()
+	_expect(screen.encloses(scroll.get_global_rect()) and scroll.is_ancestor_of(panel)
+		and scroll.clip_contents and panel.get_global_rect().position.x >= screen.position.x
+		and panel.get_global_rect().end.x <= screen.end.x,
+		"Long detailed results must fit the shared scroll without horizontal overflow.")
+	scroll.ensure_control_visible(ui[2]["stats_card"] as Control)
+	await _render()
+	_check_panel(ui[2]["stats_card"], "Player 3's scrollable statistics")
+	scroll.ensure_control_visible(game.get_node("%BackToResultsButton") as Control)
+	await _render()
+	_check_panel(game.get_node("%BackToResultsButton"), "The detailed-score return action")
 	await _capture("three-player-scorecard")
 	var image := (game.get_node("%ShareCardPreview") as TextureRect).texture
 	_expect(image != null and image.get_size() == Vector2(1200, 630),

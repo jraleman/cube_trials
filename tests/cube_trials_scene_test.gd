@@ -59,6 +59,9 @@ func _run() -> void:
 		and (_game.get_node("%RoundTimer") as Timer).is_stopped(),
 		"The shared countdown and lives pool must not run during the trial.")
 	_test_compact_hud()
+	(_game.get_node("%HudHelpButton") as Button).pressed.emit()
+	for frame in 8:
+		await process_frame
 	await _test_rebinding(settings)
 	await _test_camera_controls(settings)
 	_test_multitouch_and_pause()

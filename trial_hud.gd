@@ -16,7 +16,7 @@ var points_label: Label
 var plugs_label: Label
 var time_label: Label
 var feedback_label: Label
-var bar: GridContainer
+var bar: HFlowContainer
 var camera_button: Button
 var driver_label: Label
 var _feedback: CenterContainer
@@ -33,11 +33,10 @@ var _readability := 1.0
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_style = StyleBoxFlat.new()
-	_style.bg_color = Color("142725")
-	_style.border_color = Color("b89166", 0.55)
+	_style.bg_color = Color("142725", 0.22)
+	_style.border_color = Color("b89166", 0.20)
 	_style.set_border_width_all(1)
-	bar = GridContainer.new()
-	bar.columns = 6
+	bar = HFlowContainer.new()
 	bar.name = "Counters"
 	bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bar)
@@ -46,7 +45,7 @@ func _ready() -> void:
 	plugs_label = _metric("Plugs", PLUG, Art.CREAM)
 	var driver_panel := PanelContainer.new()
 	driver_panel.name = "Driver"
-	driver_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	driver_panel.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
 	driver_panel.add_theme_stylebox_override("panel", _style)
 	bar.add_child(driver_panel)
 	driver_label = Label.new()
@@ -59,6 +58,7 @@ func _ready() -> void:
 	time_label = _metric("Time", TIMER, Art.CREAM)
 	_actions = HBoxContainer.new()
 	_actions.name = "ViewActions"
+	_actions.size_flags_horizontal = Control.SIZE_EXPAND | Control.SIZE_SHRINK_END
 	bar.add_child(_actions)
 	camera_button = Button.new()
 	camera_button.name = "CameraButton"
@@ -86,6 +86,13 @@ func attach_pause(button: Button) -> void:
 	_style_action(button, PAUSE)
 	button.tooltip_text = "Pause (Escape / Start)"
 	button.accessibility_name = "Pause"
+	button.show()
+
+
+## Reuse the shell's controls toggle rather than another help implementation.
+func attach_help(button: Button) -> void:
+	button.reparent(_actions, false)
+	_style_action(button, button.icon)
 	button.show()
 
 
@@ -118,7 +125,6 @@ func _style_action(button: Button, texture: Texture2D) -> void:
 func fit_width(width: float, readability: float) -> void:
 	_readability = readability
 	_compact = width < 1000.0 * readability
-	bar.columns = 3 if width < 650.0 * readability else 6
 	_style.content_margin_left = 10 * readability
 	_style.content_margin_right = 10 * readability
 	_style.content_margin_top = 6 * readability
@@ -190,10 +196,11 @@ func sync(state: State, feedback: String) -> void:
 	_feedback.visible = not feedback_label.text.is_empty()
 
 
-func set_driver(name_text: String, color: Color) -> void:
-	driver_label.text = name_text
+func set_driver(name_text: String, color: Color, player_number := 0) -> void:
+	driver_label.text = "P%d" % player_number if player_number > 0 else ""
 	driver_label.accessibility_name = name_text
 	(driver_label.get_parent() as Control).tooltip_text = name_text
+	(driver_label.get_parent() as Control).visible = not driver_label.text.is_empty()
 	driver_label.add_theme_color_override("font_color", color)
 
 

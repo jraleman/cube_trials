@@ -421,17 +421,18 @@ strut remains visible for inspection; parked cars and promotional artwork do
 not expose it. Reduced motion and disabled intense effects retain essential
 airborne spring and shaft movement.
 
-A small HUD floats over the sky inside the game view: **heart = lives**,
+A small translucent HUD flows over the sky inside the game view: **heart = lives**,
 **star = points**, **spark plug = collected / 5**, and **stopwatch = adjusted
 time**. The points tooltip also reports banked flips, motion points, hazard
 bonuses and pending aerial points with their current multiplier.
-The pause button is always available as an icon. The trail now fills
+Help, camera and pause icons remain available. The trail now fills
 the space previously occupied by the title, score cards and permanent
 instruction blocks. Short event notices disappear after 2.5 seconds; a pending
 trick's landing prompt stays visible until it is banked or lost.
 
-The eight driving buttons use icons, with rebound key hints on wider screens
-and icon-only controls on phones. Tooltips and screen-reader descriptions
+The eight driving buttons start folded behind **Help** on desktop; required
+touch controls stay visible on touchscreen devices. They use icons, with rebound
+key hints on wider screens and icon-only controls on phones. Tooltips and screen-reader descriptions
 retain their action names and keys; full controls and rules remain in the
 instructions screen. Optional audio captions remain available above the
 controls. Touch targets stay at least 44 physical pixels tall, and controls

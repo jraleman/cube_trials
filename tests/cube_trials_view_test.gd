@@ -57,6 +57,8 @@ func _run() -> void:
 	_game = (load("res://games/cube_trials/gameplay.tscn") as PackedScene).instantiate()
 	get_root().add_child(_game)
 	_game.set_process(false)
+	_expect(not (_game.get("_controls") as Control).visible,
+		"Optional desktop pedals must start collapsed behind Help.")
 	_test_3d_scene()
 	settings.call("set_value", Options.ENGINE_AUDIO_KEY, true)
 	Input.action_press(Options.THROTTLE)
@@ -72,11 +74,15 @@ func _run() -> void:
 		Vector2i(1280, 720), Vector2i(390, 844), Vector2i(320, 844), Vector2i(2560, 720),
 	]:
 		get_root().size = dimensions
-		await _render_frames()
-		_test_bounds()
-		_test_brown_cube()
-		_test_draw_budget()
-		await _capture("trail-%dx%d" % [dimensions.x, dimensions.y])
+		for expanded in [false, true]:
+			if bool(_game.call("hud_controls_expanded")) != expanded:
+				(_game.get_node("%HudHelpButton") as Button).pressed.emit()
+			await _render_frames()
+			_test_bounds()
+			_test_brown_cube()
+			_test_draw_budget()
+			await _capture("trail-%dx%d%s" % [
+				dimensions.x, dimensions.y, "-help" if expanded else ""])
 		await _test_full_hud()
 	get_root().size = Vector2i(390, 844)
 	settings.call("set_value", "ui/scale", 1.5)
@@ -200,13 +206,17 @@ func _test_bounds() -> void:
 	_expect(view_rect.get_area() >= visible.get_area() * 0.80,
 		"The expanded game view must occupy at least 80 percent of the screen at %s (actual %.1f%%)."
 		% [get_root().size, view_rect.get_area() / visible.get_area() * 100.0])
-	_expect(visible.encloses(view_rect) and visible.encloses(controls.get_global_rect()),
-		"The course and every pedal must remain inside the viewport.")
-	_expect(view_rect.end.y < controls.get_global_rect().position.y,
-		"Driving controls cannot cover the car or road.")
+	_expect(visible.encloses(view_rect), "The course must remain inside the viewport.")
+	if controls.is_visible_in_tree():
+		_expect(visible.encloses(controls.get_global_rect()),
+			"Every expanded pedal must remain inside the viewport.")
+		_expect(view_rect.end.y < controls.get_global_rect().position.y,
+			"Driving controls cannot cover the car or road.")
 	var buttons: Dictionary = controls.get("buttons")
 	for action in buttons:
 		var button: Button = buttons[action]
+		if not controls.is_visible_in_tree():
+			continue
 		var rect := button.get_global_rect()
 		_expect(rect.size.x * physical_scale >= 44.0 and rect.size.y * physical_scale >= 44.0,
 			"%s needs a 44-pixel physical touch target." % action)
@@ -245,6 +255,8 @@ func _test_bounds() -> void:
 	var end := hud.bar.global_position.x
 	var row := hud.bar.global_position.y
 	for child: Control in hud.bar.get_children():
+		if not child.is_visible_in_tree():
+			continue
 		if child.global_position.y > row + 0.01:
 			end = hud.bar.global_position.x
 			row = child.global_position.y
@@ -927,6 +939,41 @@ func _test_damage_looks() -> void:
 	await _render_frames()
 
 
+func _test_hud_blur_isolation(image_node: TextureRect, blur: Material) -> void:
+	var original := image_node.texture
+	var background := Image.create(2, 2, false, Image.FORMAT_RGBA8)
+	background.fill(Color("172024"))
+	# A constant backdrop isolates HUD ink from scenery visible through transparent panels.
+	image_node.texture = ImageTexture.create_from_image(background)
+	image_node.material = blur
+	await _render_frames()
+	var filtered := get_root().get_texture().get_image()
+	image_node.material = null
+	await _render_frames()
+	var plain := get_root().get_texture().get_image()
+	var ratio := Vector2(plain.get_size()) / get_root().get_visible_rect().size
+	var tested := 0
+	var changed := 0
+	var hud := _game.get("_trial_hud") as TrialHUD
+	for control: Control in hud.bar.find_children("*", "Control", true, false):
+		if not control.is_visible_in_tree() \
+			or not (control is Label or control is Button or control is TextureRect):
+			continue
+		var rect := control.get_global_rect()
+		rect = Rect2(rect.position * ratio, rect.size * ratio)
+		for y in range(maxi(0, floori(rect.position.y)),
+			mini(plain.get_height(), ceili(rect.end.y)), 2):
+			for x in range(maxi(0, floori(rect.position.x)),
+				mini(plain.get_width(), ceili(rect.end.x)), 2):
+				tested += 1
+				changed += int(_color_difference(
+					plain.get_pixel(x, y), filtered.get_pixel(x, y)) >= 0.015)
+	image_node.texture = original
+	_expect(tested > 20 and changed == 0,
+		"The world shader must leave real HUD glyphs and icons sharp (%d tested / %d changed)."
+		% [tested, changed])
+
+
 func _test_motion_blur() -> void:
 	var view := _game.get("_view") as View
 	var state: State = _game.get("_state")
@@ -958,15 +1005,8 @@ func _test_motion_blur() -> void:
 	var car_pixels := Rect2((view.global_position + car_bounds.position) * ratio,
 		car_bounds.size * ratio)
 	var changed_world := 0
-	var changed_hud := 0
+	var changed_outside_world := 0
 	var changed_car := 0
-	var hud_pixels: Array[Rect2] = []
-	var hud := _game.get("_trial_hud") as TrialHUD
-	for child: Control in hud.bar.find_children("*", "Control", true, false):
-		if child is PanelContainer or child is Button:
-			# Rounded transparent corners reveal scenery; sample the opaque HUD interior.
-			var rect := child.get_global_rect().grow(-6.0 * float(_game.get("_ui_factor")))
-			hud_pixels.append(Rect2(rect.position * ratio, rect.size * ratio))
 	for y in range(0, sharp.get_height(), 2):
 		for x in range(0, sharp.get_width(), 2):
 			var difference := _color_difference(sharp.get_pixel(x, y), blurred.get_pixel(x, y))
@@ -974,18 +1014,16 @@ func _test_motion_blur() -> void:
 				changed_car += 1
 			if difference < 0.015:
 				continue
-			var in_hud := false
-			for rect in hud_pixels:
-				in_hud = in_hud or rect.has_point(Vector2(x, y))
-			if in_hud or not world_pixels.has_point(Vector2(x, y)):
-				changed_hud += 1
+			if not world_pixels.has_point(Vector2(x, y)):
+				changed_outside_world += 1
 			else:
 				changed_world += 1
-	_expect(changed_world > 80 and changed_hud == 0,
-		"The shader must blur scenery while leaving HUD content untouched (%d world / %d HUD pixels)."
-		% [changed_world, changed_hud])
+	_expect(changed_world > 80 and changed_outside_world == 0,
+		"Blur must stay inside the world image (%d world / %d outside pixels)."
+		% [changed_world, changed_outside_world])
 	_expect(changed_car == 0,
 		"The protected car region must retain crisp paint and wheel detail.")
+	await _test_hud_blur_isolation(image_node, blur_material)
 	image_node.material = blur_material
 	_game.call("_set_reduced_motion_enabled", true)
 	_expect(image_node.material == null,

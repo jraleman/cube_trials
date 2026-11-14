@@ -138,6 +138,8 @@ func _build_playfield() -> void:
 	_trial_hud.name = "TrialHUD"
 	overlay.add_child(_trial_hud)
 	_trial_hud.attach_pause(_pause_button)
+	_trial_hud.attach_help(_hud_help_button)
+	register_hud_controls(_controls, _resize_layout)
 	_controls.attach_camera_button(_trial_hud.camera_button)
 	_controls.camera_requested.connect(_cycle_camera)
 	(_hud.get_node("Overlay/Margins") as Control).hide()
@@ -743,7 +745,10 @@ func _sync_hud() -> void:
 		if not GameSession.is_single_player():
 			driver = "P%d / %s" % [_active_player + 1, driver]
 		driver = "%s\n%s" % [_state.course.short_label(), driver]
-		_trial_hud.set_driver(driver, Art.CREAM if GameSession.is_single_player() else _driver_color())
+		_trial_hud.set_driver(
+			driver, Art.CREAM if GameSession.is_single_player() else _driver_color(),
+			0 if GameSession.is_single_player() else _active_player + 1
+		)
 
 
 func _feedback(text: String, cue := "") -> void:
