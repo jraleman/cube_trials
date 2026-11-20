@@ -180,6 +180,7 @@ static func manifest() -> GameManifest:
 	}
 	var theme := GameTheme.new()
 	theme.logo_texture_path = "res://games/cube_trials/assets/game-icon.png"
+	theme.cover_texture_path = "res://games/cube_trials/assets/cover.png"
 	theme.accent = Art.COPPER
 	theme.light = Art.CREAM
 	theme.plaque_color = Color("415b51")
